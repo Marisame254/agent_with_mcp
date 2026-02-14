@@ -9,12 +9,14 @@ from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from rich.live import Live
+from rich.markdown import Markdown
 
 from src.agent import build_agent, create_agent_resources, get_system_prompt, get_thread_history, stream_agent_turn
 from src.config import MAX_CONTEXT_TOKENS, load_mcp_servers, setup_logging, validate_config
 from src.constants import AgentEventKind, ChatCommand
 from src.context_tracker import build_context_breakdown
-from src.memory import retrieve_memories
+from src.memory import clear_memories, delete_memory, list_memories, retrieve_memories, store_memories
 from src.ui import (
     console,
     create_prompt_session,
@@ -25,6 +27,8 @@ from src.ui import (
     show_info,
     show_tool_end,
     show_tool_start,
+    show_memories_table,
+    show_help,
     show_welcome,
 )
 
@@ -114,15 +118,88 @@ async def chat_loop(
                 return ChatLoopResult(command=ChatCommand.NEW, thread_id=selected)
             continue
 
+        if user_input.lower() == "/help":
+            show_help()
+            continue
+
         if user_input.lower() == "/context":
             await handle_context_command(
                 store, thread_id, user_id, all_tools, mcp_tool_count, messages
             )
             continue
 
+        if user_input.lower().startswith("/memory"):
+            parts = user_input.split(maxsplit=2)
+            subcmd = parts[1].lower() if len(parts) > 1 else ""
+
+            if subcmd == "help":
+                show_help()
+            elif subcmd == "search":
+                query = parts[2] if len(parts) > 2 else ""
+                if not query:
+                    show_error("Usage: /memory search <query>")
+                    continue
+                results = await retrieve_memories(store, user_id, query, max_results=20)
+                if not results:
+                    show_info("No memories found for that query.")
+                else:
+                    show_memories_table([{"key": "", "text": t} for t in results])
+            elif subcmd == "delete":
+                idx_str = parts[2] if len(parts) > 2 else ""
+                if not idx_str:
+                    show_error("Usage: /memory delete <number>")
+                    continue
+                try:
+                    idx = int(idx_str)
+                except ValueError:
+                    show_error("Please provide a valid memory number.")
+                    continue
+                mems = await list_memories(store, user_id)
+                if not mems:
+                    show_info("No memories stored yet.")
+                    continue
+                if idx < 1 or idx > len(mems):
+                    show_error(f"Invalid index. Must be between 1 and {len(mems)}.")
+                    continue
+                target = mems[idx - 1]
+                await delete_memory(store, user_id, target["key"])
+                show_info(f"Deleted memory #{idx}: {target['text']}")
+            elif subcmd == "add":
+                text = parts[2] if len(parts) > 2 else ""
+                if not text:
+                    show_error("Usage: /memory add <text>")
+                    continue
+                await store_memories(store, user_id, [text])
+                show_info(f"Memory saved: {text}")
+            elif subcmd == "clear":
+                try:
+                    confirm = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: input("Type 'yes' to confirm clearing all memories: ")
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    continue
+                if confirm.strip().lower() != "yes":
+                    show_info("Cancelled.")
+                    continue
+                count = await clear_memories(store, user_id)
+                show_info(f"Cleared {count} memories.")
+            elif subcmd == "":
+                mems = await list_memories(store, user_id)
+                if not mems:
+                    show_info("No memories stored yet.")
+                else:
+                    show_memories_table(mems)
+            else:
+                show_error(f"Unknown subcommand: {subcmd}")
+                show_help()
+            continue
+
         # Regular message
         try:
             response_text = ""
+            streaming_started = False
+            streamed_text = ""
+            live: Live | None = None
             status = console.status("[bold green]Thinking...", spinner="dots")
             status.start()
 
@@ -130,6 +207,11 @@ async def chat_loop(
                 agent, store, user_input, thread_id, user_id
             ):
                 if event.kind == AgentEventKind.TOOL_START:
+                    if live:
+                        live.stop()
+                        live = None
+                        streaming_started = False
+                        streamed_text = ""
                     status.stop()
                     show_tool_start(event.tool_name, event.tool_input)
                     status = console.status(
@@ -141,13 +223,32 @@ async def chat_loop(
                     show_tool_end(event.tool_name, event.tool_output)
                     status = console.status("[bold green]Thinking...", spinner="dots")
                     status.start()
+                elif event.kind == AgentEventKind.TOKEN:
+                    if not streaming_started:
+                        status.stop()
+                        console.print()
+                        console.print("[bold green]Assistant:[/]")
+                        live = Live(
+                            Markdown(""),
+                            console=console,
+                            refresh_per_second=8,
+                        )
+                        live.start()
+                        streaming_started = True
+                    streamed_text += event.token
+                    live.update(Markdown(streamed_text))
                 elif event.kind == AgentEventKind.RESPONSE:
                     response_text = event.response
 
             status.stop()
+            if live:
+                live.stop()
 
             if response_text:
-                show_assistant_message(response_text)
+                if not streaming_started:
+                    show_assistant_message(response_text)  # Fallback
+                else:
+                    console.print()
                 messages.append(HumanMessage(content=user_input))
                 messages.append(AIMessage(content=response_text))
             else:

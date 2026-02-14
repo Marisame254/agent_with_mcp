@@ -130,6 +130,7 @@ class AgentEvent:
     tool_input: str = ""
     tool_output: str = ""
     response: str = ""
+    token: str = ""
 
 
 async def _retrieve_and_build_messages(
@@ -211,6 +212,7 @@ async def stream_agent_turn(
     inputs = {"messages": messages}
 
     response_text = ""
+    streamed_tokens = False
 
     async for event in agent.astream_events(inputs, config=config, version="v2"):
         kind = event.get("event", "")
@@ -237,10 +239,24 @@ async def stream_agent_turn(
                 tool_output=output,
             )
 
+        elif kind == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if hasattr(chunk, "content") and chunk.content:
+                content = chunk.content
+                # Skip chunks that are only tool calls with no text
+                if isinstance(content, str) and content:
+                    response_text += content
+                    streamed_tokens = True
+                    yield AgentEvent(
+                        kind=AgentEventKind.TOKEN, token=content
+                    )
+
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             if isinstance(output, AIMessage) and output.content:
-                response_text = output.content
+                if not streamed_tokens:
+                    # Fallback: model did not support streaming
+                    response_text = output.content
 
     if response_text:
         yield AgentEvent(kind=AgentEventKind.RESPONSE, response=response_text)

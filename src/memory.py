@@ -117,6 +117,56 @@ async def retrieve_memories(
             return []
 
 
+async def list_memories(
+    store: BaseStore,
+    user_id: str,
+    limit: int = 50,
+) -> list[dict]:
+    """List all stored memories for a user.
+
+    Returns:
+        List of dicts with 'key' and 'text' fields.
+    """
+    try:
+        results = await store.asearch(
+            (*MEMORY_NAMESPACE, user_id),
+            limit=limit,
+        )
+        return [
+            {"key": item.key, "text": item.value["text"]}
+            for item in results
+            if "text" in item.value
+        ]
+    except Exception:
+        logger.debug("Failed to list memories", exc_info=True)
+        return []
+
+
+async def delete_memory(
+    store: BaseStore,
+    user_id: str,
+    key: str,
+) -> None:
+    """Delete a single memory by its key."""
+    await store.adelete((*MEMORY_NAMESPACE, user_id), key)
+
+
+async def clear_memories(
+    store: BaseStore,
+    user_id: str,
+) -> int:
+    """Delete all memories for a user. Returns the count of deleted memories."""
+    results = await store.asearch(
+        (*MEMORY_NAMESPACE, user_id),
+        limit=1000,
+    )
+    count = 0
+    for item in results:
+        await store.adelete((*MEMORY_NAMESPACE, user_id), item.key)
+        count += 1
+    return count
+
+
 def format_memories_for_prompt(memories: list[str]) -> str:
     """Format retrieved memories into a system prompt section.
 

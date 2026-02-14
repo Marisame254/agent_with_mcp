@@ -20,7 +20,17 @@ COMMANDS = {
     "/new": "Start a new conversation thread",
     "/threads": "List and resume previous conversations",
     "/context": "Show token usage breakdown",
+    "/memory": "Manage long-term memories",
+    "/help": "Show this help message",
     "/exit": "Exit the application",
+}
+
+MEMORY_SUBCOMMANDS = {
+    "/memory": "List all stored memories",
+    "/memory add <text>": "Save a custom memory",
+    "/memory search <query>": "Search memories by keyword",
+    "/memory delete <n>": "Delete memory #n from the list",
+    "/memory clear": "Delete all memories (asks confirmation)",
 }
 
 
@@ -92,6 +102,36 @@ def show_threads(threads: list[dict]) -> None:
     console.print()
 
 
+def show_help() -> None:
+    """Display help for all available commands."""
+    content = Text()
+    content.append("Commands:\n\n", style="bold")
+    for cmd, desc in COMMANDS.items():
+        content.append(f"  {cmd:<12}", style="bold cyan")
+        content.append(f"{desc}\n", style="dim")
+
+    content.append("\nMemory subcommands:\n\n", style="bold")
+    for cmd, desc in MEMORY_SUBCOMMANDS.items():
+        content.append(f"  {cmd:<28}", style="bold cyan")
+        content.append(f"{desc}\n", style="dim")
+
+    console.print(Panel(content, title="Help", border_style="bright_blue", padding=(1, 2)))
+    console.print()
+
+
+def show_memories_table(memories: list[dict]) -> None:
+    """Display a table of stored memories."""
+    table = Table(title="Memories", border_style="bright_blue")
+    table.add_column("#", style="bold", width=4)
+    table.add_column("Memory", style="white")
+
+    for i, mem in enumerate(memories, 1):
+        table.add_row(str(i), mem["text"])
+
+    console.print(table)
+    console.print()
+
+
 def show_context_breakdown(breakdown: ContextBreakdown) -> None:
     """Display the context token usage breakdown."""
     table = Table(title="Context Usage", border_style="bright_blue")
@@ -113,7 +153,7 @@ def show_context_breakdown(breakdown: ContextBreakdown) -> None:
     table.add_section()
     color = breakdown.usage_color
     table.add_row(
-        f"[bold]Total[/]",
+        "[bold]Total[/]",
         f"[{color} bold]{breakdown.total_tokens}[/]",
         f"[{color}]{breakdown.usage_percent:.0f}% of {breakdown.max_tokens}[/]",
     )

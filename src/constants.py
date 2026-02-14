@@ -17,6 +17,7 @@ class AgentEventKind(str, Enum):
 
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
+    TOKEN = "token"
     RESPONSE = "response"
 
 
