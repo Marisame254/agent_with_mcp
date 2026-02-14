@@ -302,3 +302,32 @@ async def get_thread_history(
     except Exception:
         logger.debug("Failed to list thread history", exc_info=True)
     return threads
+
+
+async def get_thread_messages(
+    checkpointer: AsyncPostgresSaver,
+    thread_id: str,
+) -> list[HumanMessage | AIMessage]:
+    """Load conversation messages for a specific thread from the checkpoint.
+
+    Args:
+        checkpointer: The Postgres checkpointer to query.
+        thread_id: The thread ID to load messages for.
+
+    Returns:
+        List of HumanMessage and AIMessage instances from the thread.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        if checkpoint_tuple is None:
+            return []
+        channel_values = checkpoint_tuple.checkpoint.get("channel_values", {})
+        messages = channel_values.get("messages", [])
+        return [
+            msg for msg in messages
+            if getattr(msg, "type", None) in ("human", "ai", "tool")
+        ]
+    except Exception:
+        logger.debug("Failed to load thread messages for %s", thread_id, exc_info=True)
+        return []

@@ -162,6 +162,44 @@ def show_context_breakdown(breakdown: ContextBreakdown) -> None:
     console.print()
 
 
+def show_conversation_history(messages: list) -> None:
+    """Display previous messages when resuming a thread."""
+    if not messages:
+        return
+
+    console.print(
+        Panel("[bold]Previous conversation[/]", border_style="dim", padding=(0, 1))
+    )
+    for msg in messages:
+        msg_type = getattr(msg, "type", None)
+
+        # AI messages that are pure tool invocations (no text content)
+        if msg_type == "ai":
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            if tool_calls:
+                for tc in tool_calls:
+                    name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
+                    console.print(f"  [yellow]~ {name}[/]")
+                if not content.strip():
+                    continue
+            elif not content.strip():
+                continue
+            console.print()
+            console.print("[bold green]Assistant:[/]")
+            console.print(Markdown(content))
+        elif msg_type == "human":
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            console.print(f"[bold blue]You>[/] {content}")
+        elif msg_type == "tool":
+            # Tool result messages — show tool name with result indicator
+            name = getattr(msg, "name", "tool")
+            console.print(f"  [green]~ {name}[/]")
+    console.print()
+    console.rule(style="dim")
+    console.print()
+
+
 def prompt_thread_selection(threads: list[dict]) -> str | None:
     """Prompt user to select a thread. Returns thread_id or None for new."""
     show_threads(threads)

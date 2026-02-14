@@ -12,7 +12,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from rich.live import Live
 from rich.markdown import Markdown
 
-from src.agent import build_agent, create_agent_resources, get_system_prompt, get_thread_history, stream_agent_turn
+from src.agent import build_agent, create_agent_resources, get_system_prompt, get_thread_history, get_thread_messages, stream_agent_turn
 from src.config import MAX_CONTEXT_TOKENS, load_mcp_servers, setup_logging, validate_config
 from src.constants import AgentEventKind, ChatCommand
 from src.context_tracker import build_context_breakdown
@@ -23,6 +23,7 @@ from src.ui import (
     prompt_thread_selection,
     show_assistant_message,
     show_context_breakdown,
+    show_conversation_history,
     show_error,
     show_info,
     show_tool_end,
@@ -80,6 +81,7 @@ async def chat_loop(
     mcp_tool_count: int,
     thread_id: str,
     user_id: str = "default",
+    resumed: bool = False,
 ) -> ChatLoopResult | None:
     """Run the main chat loop.
 
@@ -90,7 +92,17 @@ async def chat_loop(
     messages: list[HumanMessage | AIMessage] = []
 
     show_info(f"Thread: {thread_id}")
-    console.print()
+
+    # Load and display previous messages when resuming a thread
+    if resumed:
+        prev_messages = await get_thread_messages(checkpointer, thread_id)
+        if prev_messages:
+            show_conversation_history(prev_messages)
+            messages.extend(prev_messages)
+        else:
+            console.print()
+    else:
+        console.print()
 
     while True:
         try:
@@ -297,25 +309,30 @@ async def main() -> None:
         )
 
         thread_id = str(uuid.uuid4())
+        is_resumed = False
 
         threads = await get_thread_history(checkpointer)
         if threads:
             selected = prompt_thread_selection(threads)
             if selected:
                 thread_id = selected
+                is_resumed = True
 
         while True:
             result = await chat_loop(
-                agent, store, checkpointer, all_tools, mcp_tool_count, thread_id
+                agent, store, checkpointer, all_tools, mcp_tool_count,
+                thread_id, resumed=is_resumed,
             )
 
             if result is None:
                 break
             elif result.thread_id:
                 thread_id = result.thread_id
+                is_resumed = True
                 show_info(f"Resumed thread: {thread_id}")
             elif result.command == ChatCommand.NEW:
                 thread_id = str(uuid.uuid4())
+                is_resumed = False
                 show_info(f"New thread: {thread_id}")
 
     console.print("[dim]Goodbye![/]")
