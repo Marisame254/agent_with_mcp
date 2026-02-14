@@ -6,23 +6,46 @@ from dataclasses import dataclass
 
 from langchain_core.messages import BaseMessage
 
+from src.constants import (
+    CHARS_PER_TOKEN,
+    CONTEXT_USAGE_DANGER_PCT,
+    CONTEXT_USAGE_WARNING_PCT,
+    MESSAGE_TOKEN_OVERHEAD,
+)
+
 
 def count_tokens(text: str) -> int:
-    """Approximate token count using whitespace + punctuation heuristic (~4 chars/token)."""
-    return max(1, len(text) // 4)
+    """Approximate token count using a characters-per-token heuristic.
+
+    Args:
+        text: The input string to estimate tokens for.
+
+    Returns:
+        Estimated token count (minimum 1).
+    """
+    return max(1, len(text) // CHARS_PER_TOKEN)
 
 
 def count_message_tokens(messages: list[BaseMessage]) -> int:
-    """Count approximate tokens in a list of messages."""
+    """Count approximate tokens in a list of LangChain messages.
+
+    Args:
+        messages: List of BaseMessage instances.
+
+    Returns:
+        Total estimated token count including per-message overhead.
+    """
     total = 0
     for msg in messages:
         content = msg.content if isinstance(msg.content, str) else str(msg.content)
-        total += count_tokens(content) + 4  # overhead per message
+        total += count_tokens(content) + MESSAGE_TOKEN_OVERHEAD
     return total
 
 
 @dataclass
 class ContextBreakdown:
+    """Token usage breakdown for the /context command."""
+
     system_tokens: int = 0
     memory_tokens: int = 0
     messages_tokens: int = 0
@@ -50,9 +73,9 @@ class ContextBreakdown:
     @property
     def usage_color(self) -> str:
         pct = self.usage_percent
-        if pct < 50:
+        if pct < CONTEXT_USAGE_WARNING_PCT:
             return "green"
-        elif pct < 80:
+        elif pct < CONTEXT_USAGE_DANGER_PCT:
             return "yellow"
         return "red"
 
@@ -65,7 +88,19 @@ def build_context_breakdown(
     mcp_tool_count: int,
     max_tokens: int,
 ) -> ContextBreakdown:
-    """Build a token breakdown for the /context command."""
+    """Build a token breakdown for the /context command.
+
+    Args:
+        system_prompt: The system prompt text.
+        memories: List of memory strings injected into context.
+        messages: Conversation message history.
+        tool_definitions: List of tool definition dicts.
+        mcp_tool_count: Number of MCP-provided tools.
+        max_tokens: Maximum context window size.
+
+    Returns:
+        A populated ContextBreakdown instance.
+    """
     memory_text = "\n".join(memories) if memories else ""
     tools_text = str(tool_definitions) if tool_definitions else ""
 

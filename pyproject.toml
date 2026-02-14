@@ -3,7 +3,16 @@ name = "agent-with-mcp"
 version = "0.1.0"
 description = "Conversational AI agent with MCP tools, Ollama, and terminal UI"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.13"
+keywords = ["agent", "mcp", "ollama", "langgraph", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "langchain>=1.2.10",
     "langchain-ollama>=1.0.1",
@@ -17,3 +26,6 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "psycopg[binary]>=3.2.0",
 ]
+
+[project.scripts]
+agent-with-mcp = "main:main"

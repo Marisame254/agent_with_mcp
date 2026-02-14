@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from langchain_ollama import ChatOllama
 from langgraph.store.base import BaseStore
 
-logger = logging.getLogger(__name__)
+from src.constants import MEMORY_MAX_RESULTS, MEMORY_NAMESPACE
 
-MEMORY_NAMESPACE = ("memories",)
+logger = logging.getLogger(__name__)
 
 EXTRACT_PROMPT = """You are a memory extraction assistant. Given a conversation exchange, extract any facts worth remembering about the user for future conversations.
 
@@ -34,7 +35,16 @@ async def extract_memories(
     user_message: str,
     assistant_message: str,
 ) -> list[str]:
-    """Extract memorable facts from a conversation exchange."""
+    """Extract memorable facts from a conversation exchange.
+
+    Args:
+        llm: The language model used for extraction.
+        user_message: The user's message text.
+        assistant_message: The assistant's response text.
+
+    Returns:
+        List of extracted fact strings. Empty if nothing worth remembering.
+    """
     prompt = EXTRACT_PROMPT.format(
         user_message=user_message,
         assistant_message=assistant_message,
@@ -51,10 +61,14 @@ async def store_memories(
     user_id: str,
     memories: list[str],
 ) -> None:
-    """Store extracted memories in the store."""
-    for i, memory in enumerate(memories):
-        import uuid
+    """Persist extracted memories to the store.
 
+    Args:
+        store: The backing store instance.
+        user_id: Owner of the memories.
+        memories: List of fact strings to store.
+    """
+    for memory in memories:
         key = str(uuid.uuid4())
         await store.aput(
             (*MEMORY_NAMESPACE, user_id),
@@ -67,9 +81,22 @@ async def retrieve_memories(
     store: BaseStore,
     user_id: str,
     query: str,
-    max_results: int = 5,
+    max_results: int = MEMORY_MAX_RESULTS,
 ) -> list[str]:
-    """Retrieve relevant memories for a user. Uses keyword search via store.asearch."""
+    """Retrieve relevant memories for a user.
+
+    Uses keyword search via ``store.asearch``, falling back to an unfiltered
+    listing when the store has no embedding support.
+
+    Args:
+        store: The backing store instance.
+        user_id: Owner of the memories.
+        query: Search query for semantic/keyword matching.
+        max_results: Maximum number of memories to return.
+
+    Returns:
+        List of memory text strings.
+    """
     try:
         results = await store.asearch(
             (*MEMORY_NAMESPACE, user_id),
@@ -79,7 +106,6 @@ async def retrieve_memories(
         return [item.value["text"] for item in results if "text" in item.value]
     except Exception:
         logger.debug("Memory search with query failed, trying without query", exc_info=True)
-        # If search fails (e.g., no embeddings configured), try without query
         try:
             results = await store.asearch(
                 (*MEMORY_NAMESPACE, user_id),
@@ -92,7 +118,14 @@ async def retrieve_memories(
 
 
 def format_memories_for_prompt(memories: list[str]) -> str:
-    """Format retrieved memories into a system prompt section."""
+    """Format retrieved memories into a system prompt section.
+
+    Args:
+        memories: List of memory text strings.
+
+    Returns:
+        Formatted string to inject into the system prompt, or empty string.
+    """
     if not memories:
         return ""
     memory_lines = "\n".join(f"- {m}" for m in memories)

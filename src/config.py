@@ -1,3 +1,7 @@
+"""Application configuration loaded from environment variables."""
+
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -29,7 +33,13 @@ MAX_CONTEXT_TOKENS: int = int(os.environ.get("MAX_CONTEXT_TOKENS", "9000"))
 MCP_SERVERS_FILE: str = os.environ.get("MCP_SERVERS_FILE", "mcp_servers.json")
 
 
-def load_mcp_servers() -> dict:
+def load_mcp_servers() -> dict[str, dict]:
+    """Load MCP server configuration from the JSON config file.
+
+    Returns:
+        Dictionary mapping server names to their connection parameters.
+        Empty dict if the config file does not exist.
+    """
     path = Path(MCP_SERVERS_FILE)
     if not path.exists():
         return {}
@@ -38,7 +48,12 @@ def load_mcp_servers() -> dict:
 
 
 def validate_config() -> list[str]:
-    errors = []
+    """Check that required environment variables are set.
+
+    Returns:
+        List of human-readable error messages. Empty list means valid.
+    """
+    errors: list[str] = []
     if not DATABASE_URL:
         errors.append("DATABASE_URL is not set. Copy .env.example to .env and configure it.")
     if not TAVILY_API_KEY:

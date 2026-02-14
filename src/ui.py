@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from src.config import MAX_CONTEXT_TOKENS, MODEL_NAME
+from src.constants import CHAT_HISTORY_FILE
 from src.context_tracker import ContextBreakdown
 
 console = Console()
@@ -25,7 +26,7 @@ COMMANDS = {
 
 def create_prompt_session() -> PromptSession:
     """Create a prompt_toolkit session with file history."""
-    return PromptSession(history=FileHistory(".chat_history"))
+    return PromptSession(history=FileHistory(CHAT_HISTORY_FILE))
 
 
 def show_welcome() -> None:
@@ -41,11 +42,6 @@ def show_welcome() -> None:
 
     console.print(Panel(content, border_style="bright_blue", padding=(1, 2)))
     console.print()
-
-
-def show_user_message(message: str) -> None:
-    """Display a user message."""
-    console.print(f"[bold cyan]You:[/] {message}")
 
 
 def show_assistant_message(message: str) -> None:
