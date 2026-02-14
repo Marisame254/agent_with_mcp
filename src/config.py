@@ -10,7 +10,7 @@ DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
 TAVILY_API_KEY: str = os.environ.get("TAVILY_API_KEY", "")
 
 MODEL_NAME: str = os.environ.get("MODEL_NAME", "qwen3:14b")
-MAX_CONTEXT_TOKENS: int = int(os.environ.get("MAX_CONTEXT_TOKENS", "20000"))
+MAX_CONTEXT_TOKENS: int = int(os.environ.get("MAX_CONTEXT_TOKENS", "9000"))
 
 MCP_SERVERS_FILE: str = os.environ.get("MCP_SERVERS_FILE", "mcp_servers.json")
 
