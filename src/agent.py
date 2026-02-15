@@ -198,7 +198,7 @@ async def _retrieve_and_build_messages(
     system_prompt = build_system_prompt(memories)
 
     return [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=system_prompt, id="system_prompt"),
         HumanMessage(content=user_message),
     ]
 

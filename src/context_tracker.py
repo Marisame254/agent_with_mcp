@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from src.constants import (
     CHARS_PER_TOKEN,
@@ -37,6 +38,8 @@ def count_tokens(text: str) -> int:
 def count_message_tokens(messages: list[BaseMessage]) -> int:
     """Count approximate tokens in a list of LangChain messages.
 
+    Counts content, tool_calls on AIMessages, and name field on messages.
+
     Args:
         messages: List of BaseMessage instances.
 
@@ -47,6 +50,71 @@ def count_message_tokens(messages: list[BaseMessage]) -> int:
     for msg in messages:
         content = msg.content if isinstance(msg.content, str) else str(msg.content)
         total += count_tokens(content) + MESSAGE_TOKEN_OVERHEAD
+
+        # Count tool_calls in AIMessages (name, args, id)
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            tool_calls_text = json.dumps(msg.tool_calls, default=str)
+            total += count_tokens(tool_calls_text)
+
+        # Count the name field (present on ToolMessages and some others)
+        if hasattr(msg, "name") and msg.name:
+            total += count_tokens(msg.name)
+
+    return total
+
+
+def count_tool_definitions_tokens(tools: list) -> int:
+    """Count tokens for tool definitions (schemas sent to the model).
+
+    Extracts the real schema from each tool object when available,
+    falling back to str(tool).
+
+    Args:
+        tools: List of tool objects (LangChain tools, MCP tools, etc.).
+
+    Returns:
+        Total estimated token count for all tool definitions.
+    """
+    total = 0
+    for tool in tools:
+        parts: list[str] = []
+        name = getattr(tool, "name", None)
+        if name:
+            parts.append(name)
+        description = getattr(tool, "description", None)
+        if description:
+            parts.append(description)
+        args_schema = getattr(tool, "args_schema", None)
+        if args_schema is not None:
+            try:
+                schema = args_schema.schema()
+                parts.append(str(schema))
+            except Exception:
+                pass
+        if parts:
+            total += count_tokens(" ".join(parts))
+        else:
+            total += count_tokens(str(tool))
+    return total
+
+
+def detect_summary_tokens(messages: list[BaseMessage]) -> int:
+    """Count tokens from SystemMessages that contain summarization output.
+
+    The SummarizationMiddleware injects a SystemMessage with a summary
+    of earlier conversation. This function detects and counts those tokens.
+
+    Args:
+        messages: List of messages from the checkpoint state.
+
+    Returns:
+        Token count for summary SystemMessages (0 if none found).
+    """
+    total = 0
+    for msg in messages:
+        if isinstance(msg, SystemMessage) and msg.content:
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            total += count_tokens(content)
     return total
 
 
@@ -92,7 +160,7 @@ def build_context_breakdown(
     system_prompt: str,
     memories: list[str],
     messages: list[BaseMessage],
-    tool_definitions: list[dict],
+    tools: list,
     mcp_tool_count: int,
     max_tokens: int,
 ) -> ContextBreakdown:
@@ -101,8 +169,8 @@ def build_context_breakdown(
     Args:
         system_prompt: The system prompt text.
         memories: List of memory strings injected into context.
-        messages: Conversation message history.
-        tool_definitions: List of tool definition dicts.
+        messages: Conversation message history (from checkpoint state).
+        tools: List of tool objects (full objects, not just name dicts).
         mcp_tool_count: Number of MCP-provided tools.
         max_tokens: Maximum context window size.
 
@@ -110,13 +178,13 @@ def build_context_breakdown(
         A populated ContextBreakdown instance.
     """
     memory_text = "\n".join(memories) if memories else ""
-    tools_text = str(tool_definitions) if tool_definitions else ""
 
     return ContextBreakdown(
         system_tokens=count_tokens(system_prompt),
         memory_tokens=count_tokens(memory_text),
         messages_tokens=count_message_tokens(messages),
-        tools_tokens=count_tokens(tools_text),
+        tools_tokens=count_tool_definitions_tokens(tools),
         mcp_tool_count=mcp_tool_count,
+        summary_tokens=detect_summary_tokens(messages),
         max_tokens=max_tokens,
     )

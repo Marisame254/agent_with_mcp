@@ -59,22 +59,29 @@ class ChatLoopResult:
 
 
 async def handle_context_command(
+    agent,
     store,
     thread_id: str,
     user_id: str,
     all_tools: list,
     mcp_tool_count: int,
-    messages: list,
 ) -> None:
-    """Handle the /context command by displaying token usage breakdown."""
+    """Handle the /context command by displaying token usage breakdown.
+
+    Reads real messages from the agent checkpoint (including ToolMessages
+    and summarization SystemMessages) instead of relying on a local list.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await agent.aget_state(config)
+    checkpoint_messages = state.values.get("messages", []) if state.values else []
+
     memories = await retrieve_memories(store, user_id, "")
-    tool_defs = [{"name": getattr(t, "name", str(t))} for t in all_tools]
 
     breakdown = build_context_breakdown(
         system_prompt=get_system_prompt(),
         memories=memories,
-        messages=messages,
-        tool_definitions=tool_defs,
+        messages=checkpoint_messages,
+        tools=all_tools,
         mcp_tool_count=mcp_tool_count,
         max_tokens=MAX_CONTEXT_TOKENS,
     )
@@ -157,7 +164,7 @@ async def chat_loop(
 
         if user_input.lower() == "/context":
             await handle_context_command(
-                store, thread_id, user_id, all_tools, mcp_tool_count, messages
+                agent, store, thread_id, user_id, all_tools, mcp_tool_count
             )
             continue
 
