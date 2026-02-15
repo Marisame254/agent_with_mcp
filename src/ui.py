@@ -202,6 +202,70 @@ def show_conversation_history(messages: list) -> None:
     console.print()
 
 
+def show_agent_question(question: str) -> None:
+    """Display a question from the agent that requires user input."""
+    console.print()
+    console.print(
+        Panel(
+            question,
+            title="[bold yellow]El agente necesita tu respuesta[/]",
+            border_style="yellow",
+            padding=(1, 2),
+        )
+    )
+
+
+def show_tool_approval(action_requests: list[dict]) -> None:
+    """Display the tool calls that require user approval."""
+    table = Table(
+        title="Aprobación requerida",
+        border_style="yellow",
+    )
+    table.add_column("#", style="bold", width=4)
+    table.add_column("Herramienta", style="cyan")
+    table.add_column("Argumentos", style="white")
+
+    for i, ar in enumerate(action_requests, 1):
+        name = ar.get("name", "unknown")
+        args = str(ar.get("args", {}))
+        if len(args) > 120:
+            args = args[:120] + "..."
+        table.add_row(str(i), name, args)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def prompt_tool_decision() -> str:
+    """Ask the user to approve or reject a tool call.
+
+    Returns:
+        ``"approve"`` or ``"reject"``.
+    """
+    console.print("[bold yellow]Aprobar ejecución?[/] [dim](s/n)[/]", end=" ")
+    try:
+        choice = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "reject"
+    if choice in ("s", "si", "sí", "y", "yes"):
+        return "approve"
+    return "reject"
+
+
+def prompt_reject_reason() -> str:
+    """Ask the user for an optional rejection reason.
+
+    Returns:
+        The reason string (may be empty).
+    """
+    console.print("[dim]Motivo del rechazo (Enter para omitir):[/]", end=" ")
+    try:
+        return input().strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
 def prompt_thread_selection(threads: list[dict]) -> str | None:
     """Prompt user to select a thread. Returns thread_id or None for new."""
     show_threads(threads)

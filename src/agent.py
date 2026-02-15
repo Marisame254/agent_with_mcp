@@ -9,13 +9,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware, SummarizationMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama
 from langchain_tavily import TavilySearch
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from langgraph.types import Command
 
 from src.config import (
     DATABASE_URL,
@@ -24,6 +26,7 @@ from src.config import (
     TAVILY_API_KEY,
 )
 from src.constants import (
+    ASK_USER_TOOL_NAME,
     AgentEventKind,
     KEEP_MESSAGES,
     TAVILY_MAX_RESULTS,
@@ -99,21 +102,29 @@ async def build_agent(
     mcp_client: MultiServerMCPClient | None,
     checkpointer: AsyncPostgresSaver,
     store: AsyncPostgresStore,
-) -> tuple[Any, list, int]:
-    """Create the agent with all tools.
+    *,
+    ask_user_tool: BaseTool | None = None,
+) -> tuple[Any, list, int, list[str]]:
+    """Create the agent with all tools and HITL middleware for MCP tools.
 
     Args:
         mcp_client: Optional MCP client for external tool servers.
         checkpointer: Postgres-backed conversation checkpointer.
         store: Postgres-backed key-value store for memories.
+        ask_user_tool: Optional tool that lets the agent ask the user questions.
 
     Returns:
-        Tuple of (agent, all_tools, mcp_tool_count).
+        Tuple of (agent, all_tools, mcp_tool_count, mcp_tool_names).
     """
     mcp_tools = await mcp_client.get_tools() if mcp_client else []
     base_tools = build_tools()
-    all_tools = mcp_tools + base_tools
+
+    all_tools: list = mcp_tools + base_tools
+    if ask_user_tool is not None:
+        all_tools.append(ask_user_tool)
+
     mcp_tool_count = len(mcp_tools)
+    mcp_tool_names = [getattr(t, "name", str(t)) for t in mcp_tools]
 
     logger.info(
         "Building agent: %d MCP tools, %d base tools, model=%s",
@@ -124,21 +135,32 @@ async def build_agent(
 
     llm = ChatOllama(model=MODEL_NAME)
 
+    middleware: list = [
+        SummarizationMiddleware(
+            model=llm,
+            trigger=("tokens", MAX_CONTEXT_TOKENS),
+            keep=("messages", KEEP_MESSAGES),
+        ),
+    ]
+
+    # Add HITL middleware for MCP tools (require approval before execution)
+    if mcp_tool_names:
+        middleware.append(
+            HumanInTheLoopMiddleware(
+                interrupt_on={name: True for name in mcp_tool_names},
+                description_prefix="Aprobación requerida para ejecutar herramienta",
+            ),
+        )
+
     agent = create_agent(
         model=llm,
         tools=all_tools,
-        middleware=[
-            SummarizationMiddleware(
-                model=llm,
-                trigger=("tokens", MAX_CONTEXT_TOKENS),
-                keep=("messages", KEEP_MESSAGES),
-            ),
-        ],
+        middleware=middleware,
         checkpointer=checkpointer,
         store=store,
     )
 
-    return agent, all_tools, mcp_tool_count
+    return agent, all_tools, mcp_tool_count, mcp_tool_names
 
 
 @dataclass
@@ -151,6 +173,7 @@ class AgentEvent:
     tool_output: str = ""
     response: str = ""
     token: str = ""
+    action_requests: list[dict[str, Any]] | None = None
 
 
 async def _retrieve_and_build_messages(
@@ -206,33 +229,24 @@ async def _extract_and_store_memories(
         logger.debug("Memory extraction failed", exc_info=True)
 
 
-async def stream_agent_turn(
+async def _stream_and_yield(
     agent: Any,
-    store: AsyncPostgresStore,
-    user_message: str,
-    thread_id: str,
-    user_id: str = "default",
+    inputs: Any,
+    config: dict,
 ) -> AsyncGenerator[AgentEvent, None]:
-    """Stream agent events for a single conversation turn.
+    """Stream events from the agent and yield parsed AgentEvents.
 
-    Retrieves relevant memories, streams tool and response events, then
-    persists any new memories extracted from the exchange.
+    After the event stream ends, checks for pending HITL interrupts and
+    yields a ``TOOL_APPROVAL_REQUIRED`` event if any are found.
 
     Args:
         agent: The LangGraph agent instance.
-        store: The backing store for memories.
-        user_message: The user's current input.
-        thread_id: Conversation thread identifier.
-        user_id: The user identifier.
+        inputs: The inputs to pass to ``astream_events`` (messages dict or Command).
+        config: The LangGraph config with thread_id.
 
     Yields:
-        AgentEvent instances for tool starts, tool ends, and the final response.
+        AgentEvent instances.
     """
-    messages = await _retrieve_and_build_messages(store, user_message, user_id)
-
-    config = {"configurable": {"thread_id": thread_id}}
-    inputs = {"messages": messages}
-
     response_text = ""
     streamed_tokens = False
 
@@ -265,23 +279,82 @@ async def stream_agent_turn(
             chunk = event.get("data", {}).get("chunk")
             if hasattr(chunk, "content") and chunk.content:
                 content = chunk.content
-                # Skip chunks that are only tool calls with no text
                 if isinstance(content, str) and content:
                     response_text += content
                     streamed_tokens = True
-                    yield AgentEvent(
-                        kind=AgentEventKind.TOKEN, token=content
-                    )
+                    yield AgentEvent(kind=AgentEventKind.TOKEN, token=content)
 
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             if isinstance(output, AIMessage) and output.content:
                 if not streamed_tokens:
-                    # Fallback: model did not support streaming
                     response_text = output.content
+
+    # Check for pending HITL interrupts
+    state = await agent.aget_state(config)
+    if state and state.tasks:
+        for task in state.tasks:
+            if hasattr(task, "interrupts") and task.interrupts:
+                action_requests: list[dict[str, Any]] = []
+                for intr in task.interrupts:
+                    value = intr.value
+                    if isinstance(value, dict):
+                        for ar in value.get("action_requests", []):
+                            action_requests.append(dict(ar))
+                if action_requests:
+                    yield AgentEvent(
+                        kind=AgentEventKind.TOOL_APPROVAL_REQUIRED,
+                        action_requests=action_requests,
+                    )
+                    return  # Don't emit RESPONSE — waiting for approval
 
     if response_text:
         yield AgentEvent(kind=AgentEventKind.RESPONSE, response=response_text)
+
+
+async def stream_agent_turn(
+    agent: Any,
+    store: AsyncPostgresStore,
+    user_message: str,
+    thread_id: str,
+    user_id: str = "default",
+    *,
+    resume_command: Command | None = None,
+) -> AsyncGenerator[AgentEvent, None]:
+    """Stream agent events for a single conversation turn.
+
+    Retrieves relevant memories, streams tool and response events, then
+    persists any new memories extracted from the exchange.
+
+    When *resume_command* is provided the agent is resumed from a HITL
+    interrupt instead of starting a new turn.
+
+    Args:
+        agent: The LangGraph agent instance.
+        store: The backing store for memories.
+        user_message: The user's current input.
+        thread_id: Conversation thread identifier.
+        user_id: The user identifier.
+        resume_command: Optional Command to resume from a HITL interrupt.
+
+    Yields:
+        AgentEvent instances for tool starts, tool ends, and the final response.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+
+    if resume_command is not None:
+        inputs = resume_command
+    else:
+        messages = await _retrieve_and_build_messages(store, user_message, user_id)
+        inputs = {"messages": messages}
+
+    response_text = ""
+    async for event in _stream_and_yield(agent, inputs, config):
+        if event.kind == AgentEventKind.RESPONSE:
+            response_text = event.response
+        yield event
+
+    if response_text:
         await _extract_and_store_memories(store, user_message, response_text, user_id)
 
 

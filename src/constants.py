@@ -19,6 +19,7 @@ class AgentEventKind(str, Enum):
     TOOL_END = "tool_end"
     TOKEN = "token"
     RESPONSE = "response"
+    TOOL_APPROVAL_REQUIRED = "tool_approval_required"
 
 
 # Token estimation
@@ -54,6 +55,9 @@ THREAD_NAME_PROMPT: str = (
 # Context usage thresholds (percentage)
 CONTEXT_USAGE_WARNING_PCT: int = 50
 CONTEXT_USAGE_DANGER_PCT: int = 80
+
+# Tools
+ASK_USER_TOOL_NAME: str = "ask_user"
 
 # UI
 CHAT_HISTORY_FILE: str = ".chat_history"

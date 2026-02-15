@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.types import Command
 from rich.live import Live
 from rich.markdown import Markdown
 
@@ -16,18 +17,23 @@ from langchain_ollama import ChatOllama
 
 from src.agent import build_agent, create_agent_resources, generate_thread_name, get_system_prompt, get_thread_history, get_thread_messages, get_thread_name, save_thread_name, stream_agent_turn
 from src.config import MAX_CONTEXT_TOKENS, MODEL_NAME, load_mcp_servers, setup_logging, validate_config
-from src.constants import AgentEventKind, ChatCommand
+from src.constants import ASK_USER_TOOL_NAME, AgentEventKind, ChatCommand
 from src.context_tracker import build_context_breakdown
 from src.memory import clear_memories, delete_memory, list_memories, retrieve_memories, store_memories
+from src.tools import create_ask_user_tool
 from src.ui import (
     console,
     create_prompt_session,
+    prompt_reject_reason,
     prompt_thread_selection,
+    prompt_tool_decision,
+    show_agent_question,
     show_assistant_message,
     show_context_breakdown,
     show_conversation_history,
     show_error,
     show_info,
+    show_tool_approval,
     show_tool_end,
     show_tool_start,
     show_memories_table,
@@ -73,6 +79,18 @@ async def handle_context_command(
         max_tokens=MAX_CONTEXT_TOKENS,
     )
     show_context_breakdown(breakdown)
+
+
+async def _ask_user_prompt(question: str) -> str:
+    """Prompt handler for the ask_user tool.
+
+    Stops any active spinner, shows the question, and captures the user's
+    response via ``run_in_executor`` so the event loop stays unblocked.
+    """
+    show_agent_question(question)
+    loop = asyncio.get_event_loop()
+    answer = await loop.run_in_executor(None, lambda: input("Tu respuesta> ").strip())
+    return answer or "(sin respuesta)"
 
 
 async def chat_loop(
@@ -215,45 +233,95 @@ async def chat_loop(
             streaming_started = False
             streamed_text = ""
             live: Live | None = None
+            resume_command: Command | None = None
             status = console.status("[bold green]Thinking...", spinner="dots")
             status.start()
 
-            async for event in stream_agent_turn(
-                agent, store, user_input, thread_id, user_id
-            ):
-                if event.kind == AgentEventKind.TOOL_START:
-                    if live:
-                        live.stop()
-                        live = None
+            # Inner loop: process events, handle HITL approvals, resume
+            while True:
+                async for event in stream_agent_turn(
+                    agent, store, user_input, thread_id, user_id,
+                    resume_command=resume_command,
+                ):
+                    if event.kind == AgentEventKind.TOOL_START:
+                        if live:
+                            live.stop()
+                            live = None
+                            streaming_started = False
+                            streamed_text = ""
+                        status.stop()
+                        # ask_user handles its own UI — no spinner
+                        if event.tool_name == ASK_USER_TOOL_NAME:
+                            continue
+                        show_tool_start(event.tool_name, event.tool_input)
+                        status = console.status(
+                            f"[bold yellow]Running {event.tool_name}...",
+                            spinner="dots",
+                        )
+                        status.start()
+                    elif event.kind == AgentEventKind.TOOL_END:
+                        status.stop()
+                        if event.tool_name != ASK_USER_TOOL_NAME:
+                            show_tool_end(event.tool_name, event.tool_output)
+                        status = console.status(
+                            "[bold green]Thinking...", spinner="dots"
+                        )
+                        status.start()
+                    elif event.kind == AgentEventKind.TOKEN:
+                        if not streaming_started:
+                            status.stop()
+                            console.print()
+                            console.print("[bold green]Assistant:[/]")
+                            live = Live(
+                                Markdown(""),
+                                console=console,
+                                refresh_per_second=8,
+                            )
+                            live.start()
+                            streaming_started = True
+                        streamed_text += event.token
+                        live.update(Markdown(streamed_text))
+                    elif event.kind == AgentEventKind.RESPONSE:
+                        response_text = event.response
+                    elif event.kind == AgentEventKind.TOOL_APPROVAL_REQUIRED:
+                        status.stop()
+                        if live:
+                            live.stop()
+                            live = None
+                        action_requests = event.action_requests or []
+                        show_tool_approval(action_requests)
+
+                        # Build decisions for each action request
+                        decisions: list[dict] = []
+                        for ar in action_requests:
+                            decision_type = prompt_tool_decision()
+                            if decision_type == "approve":
+                                decisions.append({"type": "approve"})
+                            else:
+                                reason = prompt_reject_reason()
+                                msg = reason or (
+                                    f"Usuario rechazó la ejecución de "
+                                    f"`{ar.get('name', 'unknown')}`"
+                                )
+                                decisions.append({
+                                    "type": "reject",
+                                    "message": msg,
+                                })
+
+                        resume_command = Command(
+                            resume={"decisions": decisions}
+                        )
+                        # Restart spinner before resuming
+                        status = console.status(
+                            "[bold green]Thinking...", spinner="dots"
+                        )
+                        status.start()
                         streaming_started = False
                         streamed_text = ""
-                    status.stop()
-                    show_tool_start(event.tool_name, event.tool_input)
-                    status = console.status(
-                        f"[bold yellow]Running {event.tool_name}...", spinner="dots"
-                    )
-                    status.start()
-                elif event.kind == AgentEventKind.TOOL_END:
-                    status.stop()
-                    show_tool_end(event.tool_name, event.tool_output)
-                    status = console.status("[bold green]Thinking...", spinner="dots")
-                    status.start()
-                elif event.kind == AgentEventKind.TOKEN:
-                    if not streaming_started:
-                        status.stop()
-                        console.print()
-                        console.print("[bold green]Assistant:[/]")
-                        live = Live(
-                            Markdown(""),
-                            console=console,
-                            refresh_per_second=8,
-                        )
-                        live.start()
-                        streaming_started = True
-                    streamed_text += event.token
-                    live.update(Markdown(streamed_text))
-                elif event.kind == AgentEventKind.RESPONSE:
-                    response_text = event.response
+                        continue  # re-enter the while loop
+
+                # If we reach here, the stream finished without needing resume
+                break
 
             status.stop()
             if live:
@@ -318,8 +386,9 @@ async def main() -> None:
                 logger.warning("Failed to initialize MCP client: %s", e)
                 show_error(f"MCP initialization failed: {e}. Continuing without MCP tools.")
 
-        agent, all_tools, mcp_tool_count = await build_agent(
-            mcp_client, checkpointer, store
+        ask_user_tool = create_ask_user_tool(_ask_user_prompt)
+        agent, all_tools, mcp_tool_count, mcp_tool_names = await build_agent(
+            mcp_client, checkpointer, store, ask_user_tool=ask_user_tool,
         )
 
         thread_id = str(uuid.uuid4())
