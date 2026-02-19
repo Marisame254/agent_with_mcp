@@ -21,6 +21,7 @@ COMMANDS = {
     "/threads": "List and resume previous conversations",
     "/context": "Show token usage breakdown",
     "/memory": "Manage long-term memories",
+    "/model [nombre]": "Show or change the active Ollama model",
     "/help": "Show this help message",
     "/exit": "Exit the application",
 }
@@ -264,6 +265,19 @@ def prompt_reject_reason() -> str:
         return input().strip()
     except (EOFError, KeyboardInterrupt):
         return ""
+
+
+def show_models_table(models: list[str], current_model: str) -> None:
+    """Display available Ollama models with the active one highlighted."""
+    table = Table(title="Modelos disponibles en Ollama", border_style="bright_blue")
+    table.add_column("Modelo", style="white")
+    table.add_column("Activo", justify="center", width=8)
+    for model in models:
+        active = "[bold green]✓[/]" if model == current_model else ""
+        table.add_row(model, active)
+    console.print(table)
+    console.print("[dim]Usar /model <nombre> para cambiar[/]")
+    console.print()
 
 
 def prompt_thread_selection(threads: list[dict]) -> str | None:

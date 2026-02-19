@@ -33,6 +33,7 @@ from src.ui import (
     show_conversation_history,
     show_error,
     show_info,
+    show_models_table,
     show_tool_approval,
     show_tool_end,
     show_tool_start,
@@ -50,12 +51,14 @@ class ChatLoopResult:
     """Result returned by the chat loop to control thread lifecycle.
 
     Attributes:
-        command: The action to take (NEW thread or EXIT).
+        command: The action to take (NEW thread, EXIT, or MODEL change).
         thread_id: Target thread ID when resuming a conversation.
+        model_name: New model name when command is MODEL.
     """
 
     command: ChatCommand
     thread_id: str = ""
+    model_name: str = ""
 
 
 async def handle_context_command(
@@ -100,6 +103,18 @@ async def _ask_user_prompt(question: str) -> str:
     return answer or "(sin respuesta)"
 
 
+async def handle_model_list_command(current_model: str) -> None:
+    """Display available Ollama models and highlight the active one."""
+    try:
+        from ollama import AsyncClient
+        client = AsyncClient()
+        response = await client.list()
+        models = [m.model for m in response.models]
+        show_models_table(models, current_model)
+    except Exception as e:
+        show_error(f"No se pudo conectar con Ollama: {e}")
+
+
 async def chat_loop(
     agent,
     store,
@@ -109,6 +124,7 @@ async def chat_loop(
     thread_id: str,
     user_id: str = "default",
     resumed: bool = False,
+    current_model: str = MODEL_NAME,
 ) -> ChatLoopResult | None:
     """Run the main chat loop.
 
@@ -234,6 +250,15 @@ async def chat_loop(
                 show_help()
             continue
 
+        if user_input.lower().startswith("/model"):
+            parts = user_input.split(maxsplit=1)
+            new_model = parts[1].strip() if len(parts) > 1 else ""
+            if new_model:
+                return ChatLoopResult(command=ChatCommand.MODEL, model_name=new_model)
+            else:
+                await handle_model_list_command(current_model)
+            continue
+
         # Regular message
         try:
             response_text = ""
@@ -246,6 +271,7 @@ async def chat_loop(
 
             # Inner loop: process events, handle HITL approvals, resume
             while True:
+                needs_resume = False
                 async for event in stream_agent_turn(
                     agent, store, user_input, thread_id, user_id,
                     resume_command=resume_command,
@@ -325,10 +351,11 @@ async def chat_loop(
                         status.start()
                         streaming_started = False
                         streamed_text = ""
-                        continue  # re-enter the while loop
+                        needs_resume = True
+                        break  # exit async for; while True will restart
 
-                # If we reach here, the stream finished without needing resume
-                break
+                if not needs_resume:
+                    break  # stream finished without needing resume
 
             status.stop()
             if live:
@@ -346,7 +373,7 @@ async def chat_loop(
                 if is_new_thread:
                     is_new_thread = False
                     try:
-                        llm = ChatOllama(model=MODEL_NAME)
+                        llm = ChatOllama(model=current_model)
                         name = await generate_thread_name(llm, user_input)
                         await save_thread_name(store, thread_id, name)
                         show_info(f"Thread: {name}")
@@ -394,8 +421,10 @@ async def main() -> None:
                 show_error(f"MCP initialization failed: {e}. Continuing without MCP tools.")
 
         ask_user_tool = create_ask_user_tool(_ask_user_prompt)
+        current_model = MODEL_NAME
         agent, all_tools, mcp_tool_count, mcp_tool_names = await build_agent(
             mcp_client, checkpointer, store, ask_user_tool=ask_user_tool,
+            model_name=current_model,
         )
 
         thread_id = str(uuid.uuid4())
@@ -411,11 +440,20 @@ async def main() -> None:
         while True:
             result = await chat_loop(
                 agent, store, checkpointer, all_tools, mcp_tool_count,
-                thread_id, resumed=is_resumed,
+                thread_id, resumed=is_resumed, current_model=current_model,
             )
 
             if result is None:
                 break
+            elif result.command == ChatCommand.MODEL:
+                current_model = result.model_name
+                show_info(f"Cambiando modelo a: {current_model}...")
+                agent, all_tools, mcp_tool_count, _ = await build_agent(
+                    mcp_client, checkpointer, store, ask_user_tool=ask_user_tool,
+                    model_name=current_model,
+                )
+                show_info(f"Modelo activo: {current_model}")
+                is_resumed = True
             elif result.thread_id:
                 thread_id = result.thread_id
                 is_resumed = True

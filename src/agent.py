@@ -104,6 +104,7 @@ async def build_agent(
     store: AsyncPostgresStore,
     *,
     ask_user_tool: BaseTool | None = None,
+    model_name: str = MODEL_NAME,
 ) -> tuple[Any, list, int, list[str]]:
     """Create the agent with all tools and HITL middleware for MCP tools.
 
@@ -112,6 +113,7 @@ async def build_agent(
         checkpointer: Postgres-backed conversation checkpointer.
         store: Postgres-backed key-value store for memories.
         ask_user_tool: Optional tool that lets the agent ask the user questions.
+        model_name: Ollama model name to use for the LLM.
 
     Returns:
         Tuple of (agent, all_tools, mcp_tool_count, mcp_tool_names).
@@ -130,10 +132,10 @@ async def build_agent(
         "Building agent: %d MCP tools, %d base tools, model=%s",
         mcp_tool_count,
         len(base_tools),
-        MODEL_NAME,
+        model_name,
     )
 
-    llm = ChatOllama(model=MODEL_NAME)
+    llm = ChatOllama(model=model_name)
 
     middleware: list = [
         SummarizationMiddleware(

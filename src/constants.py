@@ -10,6 +10,7 @@ class ChatCommand(Enum):
 
     NEW = "NEW"
     EXIT = "EXIT"
+    MODEL = "MODEL"
 
 
 class AgentEventKind(str, Enum):
