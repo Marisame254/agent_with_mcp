@@ -21,7 +21,6 @@ dependencies = [
     "langchain-mcp-adapters>=0.1.0",
     "langgraph>=0.4.0",
     "langgraph-checkpoint-postgres>=3.0.4",
-    "langmem>=0.0.20",
     "rich>=14.0.0",
     "prompt-toolkit>=3.0.50",
     "python-dotenv>=1.1.0",

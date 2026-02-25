@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
@@ -292,7 +294,7 @@ def show_models_table(models_by_provider: dict[str, list[str]], current_model: s
     console.print()
 
 
-def prompt_thread_selection(threads: list[dict]) -> str | None:
+async def prompt_thread_selection(threads: list[dict]) -> str | None:
     """Prompt user to select a thread. Returns thread_id or None for new."""
     show_threads(threads)
     if not threads:
@@ -300,7 +302,8 @@ def prompt_thread_selection(threads: list[dict]) -> str | None:
 
     console.print("Enter thread number to resume, or press Enter for new:")
     try:
-        choice = input("> ").strip()
+        loop = asyncio.get_event_loop()
+        choice = await loop.run_in_executor(None, lambda: input(" >> ").strip())
     except (EOFError, KeyboardInterrupt):
         return None
 

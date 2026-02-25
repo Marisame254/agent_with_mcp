@@ -61,20 +61,23 @@ async def store_memories(
     user_id: str,
     memories: list[str],
 ) -> None:
-    """Persist extracted memories to the store.
+    """Persist extracted memories to the store, skipping exact duplicates.
 
     Args:
         store: The backing store instance.
         user_id: Owner of the memories.
         memories: List of fact strings to store.
     """
+    existing = await list_memories(store, user_id, limit=200)
+    existing_texts = {m["text"] for m in existing}
     for memory in memories:
-        key = str(uuid.uuid4())
-        await store.aput(
-            (*MEMORY_NAMESPACE, user_id),
-            key,
-            {"text": memory},
-        )
+        if memory not in existing_texts:
+            key = str(uuid.uuid4())
+            await store.aput(
+                (*MEMORY_NAMESPACE, user_id),
+                key,
+                {"text": memory},
+            )
 
 
 async def retrieve_memories(
@@ -83,15 +86,16 @@ async def retrieve_memories(
     query: str,
     max_results: int = MEMORY_MAX_RESULTS,
 ) -> list[str]:
-    """Retrieve relevant memories for a user.
+    """Retrieve memories for a user.
 
-    Uses keyword search via ``store.asearch``, falling back to an unfiltered
-    listing when the store has no embedding support.
+    Uses ``store.asearch`` which, without a vector index configured, returns
+    the most recently stored memories (the ``query`` parameter is ignored by
+    the plain PostgresStore implementation).
 
     Args:
         store: The backing store instance.
         user_id: Owner of the memories.
-        query: Search query for semantic/keyword matching.
+        query: Passed to asearch; has no effect without a vector index.
         max_results: Maximum number of memories to return.
 
     Returns:
@@ -105,16 +109,8 @@ async def retrieve_memories(
         )
         return [item.value["text"] for item in results if "text" in item.value]
     except Exception:
-        logger.debug("Memory search with query failed, trying without query", exc_info=True)
-        try:
-            results = await store.asearch(
-                (*MEMORY_NAMESPACE, user_id),
-                limit=max_results,
-            )
-            return [item.value["text"] for item in results if "text" in item.value]
-        except Exception:
-            logger.debug("Memory retrieval fallback failed", exc_info=True)
-            return []
+        logger.debug("Memory retrieval failed", exc_info=True)
+        return []
 
 
 async def list_memories(

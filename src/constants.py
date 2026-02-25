@@ -32,8 +32,12 @@ TOOL_INPUT_DISPLAY_LIMIT: int = 100
 TOOL_OUTPUT_DISPLAY_LIMIT: int = 200
 
 # Thread history
+# NOTE: alist() returns individual checkpoints, not threads. Each conversation
+# turn generates several checkpoints (agent node, tool nodes, etc.). This limit
+# must be large enough to cover all expected threads × their average checkpoint
+# count. At ~20 checkpoints/turn and ~20 turns/thread, 1000 covers ~50 threads.
 THREAD_PREVIEW_LIMIT: int = 80
-THREAD_LIST_LIMIT: int = 50
+THREAD_LIST_LIMIT: int = 1000
 
 # Agent summarization
 KEEP_MESSAGES: int = 20

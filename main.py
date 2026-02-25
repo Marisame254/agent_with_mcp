@@ -13,12 +13,40 @@ from langgraph.types import Command
 from rich.live import Live
 from rich.markdown import Markdown
 
-from src.agent import build_agent, create_agent_resources, generate_thread_name, get_system_prompt, get_thread_history, get_thread_messages, get_thread_name, save_thread_name, stream_agent_turn
-from src.config import MAX_CONTEXT_TOKENS, MODEL_NAME, load_mcp_servers, setup_logging, validate_config
-from src.providers import DEEPSEEK_MODELS, OPENAI_MODELS, ModelSpec, build_llm, list_ollama_models
+from src.agent import (
+    build_agent,
+    create_agent_resources,
+    generate_thread_name,
+    get_system_prompt,
+    get_thread_history,
+    get_thread_messages,
+    get_thread_name,
+    save_thread_name,
+    stream_agent_turn,
+)
+from src.config import (
+    MAX_CONTEXT_TOKENS,
+    MODEL_NAME,
+    load_mcp_servers,
+    setup_logging,
+    validate_config,
+)
+from src.providers import (
+    DEEPSEEK_MODELS,
+    OPENAI_MODELS,
+    ModelSpec,
+    build_llm,
+    list_ollama_models,
+)
 from src.constants import ASK_USER_TOOL_NAME, AgentEventKind, ChatCommand
 from src.context_tracker import build_context_breakdown
-from src.memory import clear_memories, delete_memory, list_memories, retrieve_memories, store_memories
+from src.memory import (
+    clear_memories,
+    delete_memory,
+    list_memories,
+    retrieve_memories,
+    store_memories,
+)
 from src.tools import create_ask_user_tool
 from src.ui import (
     console,
@@ -153,7 +181,7 @@ async def chat_loop(
     while True:
         try:
             user_input = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: session.prompt("You> ")
+                None, lambda: session.prompt("You >> ")
             )
         except (EOFError, KeyboardInterrupt):
             return None
@@ -171,7 +199,7 @@ async def chat_loop(
 
         if user_input.lower() == "/threads":
             threads = await get_thread_history(checkpointer, store)
-            selected = prompt_thread_selection(threads)
+            selected = await prompt_thread_selection(threads)
             if selected:
                 return ChatLoopResult(command=ChatCommand.NEW, thread_id=selected)
             continue
@@ -232,7 +260,8 @@ async def chat_loop(
             elif subcmd == "clear":
                 try:
                     confirm = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: input("Type 'yes' to confirm clearing all memories: ")
+                        None,
+                        lambda: input("Type 'yes' to confirm clearing all memories: "),
                     )
                 except (EOFError, KeyboardInterrupt):
                     continue
@@ -275,7 +304,11 @@ async def chat_loop(
             while True:
                 needs_resume = False
                 async for event in stream_agent_turn(
-                    agent, store, user_input, thread_id, user_id,
+                    agent,
+                    store,
+                    user_input,
+                    thread_id,
+                    user_id,
                     model_name=current_model,
                     resume_command=resume_command,
                 ):
@@ -344,9 +377,7 @@ async def chat_loop(
                                     "message": msg,
                                 })
 
-                        resume_command = Command(
-                            resume={"decisions": decisions}
-                        )
+                        resume_command = Command(resume={"decisions": decisions})
                         # Restart spinner before resuming
                         status = console.status(
                             "[bold green]Thinking...", spinner="dots"
@@ -404,7 +435,9 @@ async def main() -> None:
 
     mcp_config = load_mcp_servers()
     if not mcp_config:
-        show_info("No MCP servers configured in mcp_servers.json. Running without MCP tools.")
+        show_info(
+            "No MCP servers configured in mcp_servers.json. Running without MCP tools."
+        )
 
     checkpointer_cm, store_cm = await create_agent_resources()
 
@@ -421,12 +454,17 @@ async def main() -> None:
                 show_info(f"MCP servers: {', '.join(server_names)}")
             except Exception as e:
                 logger.warning("Failed to initialize MCP client: %s", e)
-                show_error(f"MCP initialization failed: {e}. Continuing without MCP tools.")
+                show_error(
+                    f"MCP initialization failed: {e}. Continuing without MCP tools."
+                )
 
         ask_user_tool = create_ask_user_tool(_ask_user_prompt)
         current_model = MODEL_NAME
         agent, all_tools, mcp_tool_count, mcp_tool_names = await build_agent(
-            mcp_client, checkpointer, store, ask_user_tool=ask_user_tool,
+            mcp_client,
+            checkpointer,
+            store,
+            ask_user_tool=ask_user_tool,
             model_name=current_model,
         )
 
@@ -435,15 +473,21 @@ async def main() -> None:
 
         threads = await get_thread_history(checkpointer, store)
         if threads:
-            selected = prompt_thread_selection(threads)
+            selected = await prompt_thread_selection(threads)
             if selected:
                 thread_id = selected
                 is_resumed = True
 
         while True:
             result = await chat_loop(
-                agent, store, checkpointer, all_tools, mcp_tool_count,
-                thread_id, resumed=is_resumed, current_model=current_model,
+                agent,
+                store,
+                checkpointer,
+                all_tools,
+                mcp_tool_count,
+                thread_id,
+                resumed=is_resumed,
+                current_model=current_model,
             )
 
             if result is None:
@@ -452,7 +496,10 @@ async def main() -> None:
                 current_model = result.model_name
                 show_info(f"Cambiando modelo a: {current_model}...")
                 agent, all_tools, mcp_tool_count, _ = await build_agent(
-                    mcp_client, checkpointer, store, ask_user_tool=ask_user_tool,
+                    mcp_client,
+                    checkpointer,
+                    store,
+                    ask_user_tool=ask_user_tool,
                     model_name=current_model,
                 )
                 show_info(f"Modelo activo: {current_model}")
