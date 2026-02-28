@@ -9,25 +9,9 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.store.base import BaseStore
 
 from src.constants import MEMORY_MAX_RESULTS, MEMORY_NAMESPACE
+from src.prompts import EXTRACT_MEMORIES_PROMPT
 
 logger = logging.getLogger(__name__)
-
-EXTRACT_PROMPT = """You are a memory extraction assistant. Given a conversation exchange, extract any facts worth remembering about the user for future conversations.
-
-Examples of useful facts:
-- User's name, location, profession
-- User's preferences and interests
-- Important context about their projects or goals
-- Technical preferences (languages, tools, frameworks)
-
-If there are no facts worth remembering, respond with exactly: NONE
-
-Otherwise, respond with one fact per line, nothing else. Be concise.
-
-User said: {user_message}
-Assistant said: {assistant_message}
-
-Facts to remember:"""
 
 
 async def extract_memories(
@@ -45,7 +29,7 @@ async def extract_memories(
     Returns:
         List of extracted fact strings. Empty if nothing worth remembering.
     """
-    prompt = EXTRACT_PROMPT.format(
+    prompt = EXTRACT_MEMORIES_PROMPT.format(
         user_message=user_message,
         assistant_message=assistant_message,
     )
