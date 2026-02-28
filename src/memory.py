@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 from langgraph.store.base import BaseStore
 
 from src.constants import MEMORY_MAX_RESULTS, MEMORY_NAMESPACE
@@ -31,7 +31,7 @@ Facts to remember:"""
 
 
 async def extract_memories(
-    llm: ChatOllama,
+    llm: BaseChatModel,
     user_message: str,
     assistant_message: str,
 ) -> list[str]:

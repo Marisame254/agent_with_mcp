@@ -27,6 +27,7 @@ from src.agent import (
 from src.config import (
     MAX_CONTEXT_TOKENS,
     MODEL_NAME,
+    TAVILY_API_KEY,
     load_mcp_servers,
     setup_logging,
     validate_config,
@@ -56,6 +57,7 @@ from src.ui import (
     prompt_tool_decision,
     show_agent_question,
     show_assistant_message,
+    MCP_SUBCOMMANDS,
     show_context_breakdown,
     show_conversation_history,
     show_error,
@@ -69,6 +71,8 @@ from src.ui import (
     show_help,
     show_welcome,
 )
+from rich.panel import Panel
+from rich.text import Text
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -128,8 +132,11 @@ async def _ask_user_prompt(question: str) -> str:
     response via ``run_in_executor`` so the event loop stays unblocked.
     """
     show_agent_question(question)
-    loop = asyncio.get_event_loop()
-    answer = await loop.run_in_executor(None, lambda: input("Tu respuesta> ").strip())
+    loop = asyncio.get_running_loop()
+    try:
+        answer = await loop.run_in_executor(None, lambda: input("Tu respuesta> ").strip())
+    except (EOFError, KeyboardInterrupt):
+        return "(sin respuesta)"
     return answer or "(sin respuesta)"
 
 
@@ -160,14 +167,11 @@ async def handle_mcp_command(
     """
     subcmd = parts[1].lower() if len(parts) > 1 else "list"
 
-    if subcmd in ("list", ""):
+    if subcmd == "list":
         show_mcp_table(mcp_config, disabled_servers)
         return None
 
     if subcmd == "help":
-        from src.ui import MCP_SUBCOMMANDS
-        from rich.text import Text
-        from rich.panel import Panel
         content = Text()
         content.append("MCP subcommands:\n\n", style="bold")
         for cmd, desc in MCP_SUBCOMMANDS.items():
@@ -251,7 +255,7 @@ async def chat_loop(
 
     while True:
         try:
-            user_input = await asyncio.get_event_loop().run_in_executor(
+            user_input = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: session.prompt("You >> ")
             )
         except (EOFError, KeyboardInterrupt):
@@ -330,7 +334,7 @@ async def chat_loop(
                 show_info(f"Memory saved: {text}")
             elif subcmd == "clear":
                 try:
-                    confirm = await asyncio.get_event_loop().run_in_executor(
+                    confirm = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: input("Type 'yes' to confirm clearing all memories: "),
                     )
@@ -441,11 +445,11 @@ async def chat_loop(
                         # Build decisions for each action request
                         decisions: list[dict] = []
                         for ar in action_requests:
-                            decision_type = prompt_tool_decision()
+                            decision_type = await prompt_tool_decision()
                             if decision_type == "approve":
                                 decisions.append({"type": "approve"})
                             else:
-                                reason = prompt_reject_reason()
+                                reason = await prompt_reject_reason()
                                 msg = reason or (
                                     f"Usuario rechazó la ejecución de "
                                     f"`{ar.get('name', 'unknown')}`"
@@ -510,6 +514,9 @@ async def main() -> None:
         return
 
     show_welcome()
+
+    if not TAVILY_API_KEY:
+        show_info("TAVILY_API_KEY no configurada — búsqueda web deshabilitada.")
 
     mcp_config_full = load_mcp_servers()
     disabled_servers: frozenset[str] = frozenset()
@@ -607,22 +614,23 @@ async def main() -> None:
                 )
                 show_info(f"Modelo activo: {current_model}")
                 is_resumed = True
-            elif result.thread_id:
-                thread_id = result.thread_id
-                is_resumed = True
-                name = await get_thread_name(store, thread_id)
-                label = name or thread_id[:8]
-                show_info(f"Resumed thread: {label}")
             elif result.command == ChatCommand.NEW:
-                thread_id = str(uuid.uuid4())
-                is_resumed = False
-                show_info(f"New thread: {thread_id}")
+                if result.thread_id:
+                    thread_id = result.thread_id
+                    is_resumed = True
+                    name = await get_thread_name(store, thread_id)
+                    label = name or thread_id[:8]
+                    show_info(f"Resumed thread: {label}")
+                else:
+                    thread_id = str(uuid.uuid4())
+                    is_resumed = False
+                    show_info(f"New thread: {thread_id}")
 
     console.print("[dim]Goodbye![/]")
 
 
-if __name__ == "__main__":
-    # psycopg requires SelectorEventLoop on Windows (ProactorEventLoop is not supported)
+def run() -> None:
+    """Synchronous entry point for the console script."""
     import sys
 
     if sys.platform == "win32":
@@ -634,3 +642,7 @@ if __name__ == "__main__":
         )
     else:
         asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

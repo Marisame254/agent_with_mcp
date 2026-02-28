@@ -58,6 +58,5 @@ def validate_config() -> list[str]:
     errors: list[str] = []
     if not DATABASE_URL:
         errors.append("DATABASE_URL is not set. Copy .env.example to .env and configure it.")
-    if not TAVILY_API_KEY:
-        errors.append("TAVILY_API_KEY is not set. Get one at https://tavily.com")
+    # TAVILY_API_KEY is optional — web search will be disabled without it
     return errors

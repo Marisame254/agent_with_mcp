@@ -282,31 +282,31 @@ def show_tool_approval(action_requests: list[dict]) -> None:
     console.print()
 
 
-def prompt_tool_decision() -> str:
+async def prompt_tool_decision() -> str:
     """Ask the user to approve or reject a tool call.
 
     Returns:
         ``"approve"`` or ``"reject"``.
     """
     console.print("[bold yellow]Aprobar ejecución?[/] [dim](s/n)[/]", end=" ")
+    loop = asyncio.get_running_loop()
     try:
-        choice = input().strip().lower()
+        choice = await loop.run_in_executor(None, lambda: input().strip().lower())
     except (EOFError, KeyboardInterrupt):
         return "reject"
-    if choice in ("s", "si", "sí", "y", "yes"):
-        return "approve"
-    return "reject"
+    return "approve" if choice in ("s", "si", "sí", "y", "yes") else "reject"
 
 
-def prompt_reject_reason() -> str:
+async def prompt_reject_reason() -> str:
     """Ask the user for an optional rejection reason.
 
     Returns:
         The reason string (may be empty).
     """
     console.print("[dim]Motivo del rechazo (Enter para omitir):[/]", end=" ")
+    loop = asyncio.get_running_loop()
     try:
-        return input().strip()
+        return await loop.run_in_executor(None, lambda: input().strip())
     except (EOFError, KeyboardInterrupt):
         return ""
 
@@ -344,7 +344,7 @@ async def prompt_thread_selection(threads: list[dict]) -> str | None:
 
     console.print("Enter thread number to resume, or press Enter for new:")
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         choice = await loop.run_in_executor(None, lambda: input(" >> ").strip())
     except (EOFError, KeyboardInterrupt):
         return None

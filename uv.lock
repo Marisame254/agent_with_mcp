@@ -3,43 +3,6 @@ revision = 2
 requires-python = ">=3.13"
 
 [[package]]
-name = "agent-with-mcp"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "deepagents" },
-    { name = "langchain" },
-    { name = "langchain-mcp-adapters" },
-    { name = "langchain-ollama" },
-    { name = "langchain-openai" },
-    { name = "langchain-tavily" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "prompt-toolkit" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "python-dotenv" },
-    { name = "rich" },
-    { name = "tiktoken" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "deepagents", specifier = ">=0.4.3" },
-    { name = "langchain", specifier = ">=1.2.10" },
-    { name = "langchain-mcp-adapters", specifier = ">=0.1.0" },
-    { name = "langchain-ollama", specifier = ">=1.0.1" },
-    { name = "langchain-openai", specifier = ">=0.3.0" },
-    { name = "langchain-tavily", specifier = ">=0.2.17" },
-    { name = "langgraph", specifier = ">=0.4.0" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.4" },
-    { name = "prompt-toolkit", specifier = ">=3.0.50" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
-    { name = "rich", specifier = ">=14.0.0" },
-    { name = "tiktoken", specifier = ">=0.7.0" },
-]
-
-[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -872,6 +835,43 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8d/bc/8172fefad4f2da888a6d564a27d1fb7d4dbf3c640899c2b40c46235cbe98/langsmith-0.7.3.tar.gz", hash = "sha256:0223b97021af62d2cf53c8a378a27bd22e90a7327e45b353e0069ae60d5d6f9e", size = 988575, upload-time = "2026-02-13T23:25:32.916Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/9d/5a68b6b5e313ffabbb9725d18a71edb48177fd6d3ad329c07801d2a8e862/langsmith-0.7.3-py3-none-any.whl", hash = "sha256:03659bf9274e6efcead361c9c31a7849ea565ae0d6c0d73e1d8b239029eff3be", size = 325718, upload-time = "2026-02-13T23:25:31.52Z" },
+]
+
+[[package]]
+name = "lyra"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "deepagents" },
+    { name = "langchain" },
+    { name = "langchain-mcp-adapters" },
+    { name = "langchain-ollama" },
+    { name = "langchain-openai" },
+    { name = "langchain-tavily" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "prompt-toolkit" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "tiktoken" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "deepagents", specifier = ">=0.4.3" },
+    { name = "langchain", specifier = ">=1.2.10" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.1.0" },
+    { name = "langchain-ollama", specifier = ">=1.0.1" },
+    { name = "langchain-openai", specifier = ">=0.3.0" },
+    { name = "langchain-tavily", specifier = ">=0.2.17" },
+    { name = "langgraph", specifier = ">=0.4.0" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.4" },
+    { name = "prompt-toolkit", specifier = ">=3.0.50" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "rich", specifier = ">=14.0.0" },
+    { name = "tiktoken", specifier = ">=0.7.0" },
 ]
 
 [[package]]
