@@ -60,6 +60,7 @@ from src.ui import (
     show_conversation_history,
     show_error,
     show_info,
+    show_mcp_table,
     show_models_table,
     show_tool_approval,
     show_tool_end,
@@ -78,14 +79,16 @@ class ChatLoopResult:
     """Result returned by the chat loop to control thread lifecycle.
 
     Attributes:
-        command: The action to take (NEW thread, EXIT, or MODEL change).
+        command: The action to take (NEW thread, EXIT, MODEL change, or MCP reload).
         thread_id: Target thread ID when resuming a conversation.
         model_name: New model name when command is MODEL.
+        mcp_disabled: Updated set of disabled server names when command is MCP_RELOAD.
     """
 
     command: ChatCommand
     thread_id: str = ""
     model_name: str = ""
+    mcp_disabled: frozenset[str] = frozenset()
 
 
 async def handle_context_command(
@@ -145,6 +148,72 @@ async def handle_model_list_command(current_model: str) -> None:
     show_models_table(models_by_provider, current_model)
 
 
+async def handle_mcp_command(
+    parts: list[str],
+    mcp_config: dict,
+    disabled_servers: frozenset[str],
+) -> ChatLoopResult | None:
+    """Handle the /mcp command and its subcommands.
+
+    Returns a ChatLoopResult with MCP_RELOAD when a state change is needed,
+    or None when the command only displays information.
+    """
+    subcmd = parts[1].lower() if len(parts) > 1 else "list"
+
+    if subcmd in ("list", ""):
+        show_mcp_table(mcp_config, disabled_servers)
+        return None
+
+    if subcmd == "help":
+        from src.ui import MCP_SUBCOMMANDS
+        from rich.text import Text
+        from rich.panel import Panel
+        content = Text()
+        content.append("MCP subcommands:\n\n", style="bold")
+        for cmd, desc in MCP_SUBCOMMANDS.items():
+            content.append(f"  {cmd:<28}", style="bold cyan")
+            content.append(f"{desc}\n", style="dim")
+        console.print(Panel(content, title="MCP Help", border_style="bright_blue", padding=(1, 2)))
+        console.print()
+        return None
+
+    if subcmd == "reload":
+        return ChatLoopResult(command=ChatCommand.MCP_RELOAD, mcp_disabled=disabled_servers)
+
+    if subcmd == "disable":
+        name = parts[2] if len(parts) > 2 else ""
+        if not name:
+            show_error("Usage: /mcp disable <nombre>")
+            return None
+        if name not in mcp_config:
+            show_error(f"Servidor '{name}' no encontrado en mcp_servers.json.")
+            return None
+        if name in disabled_servers:
+            show_info(f"El servidor '{name}' ya está deshabilitado.")
+            return None
+        new_disabled = disabled_servers | {name}
+        show_info(f"Deshabilitando servidor '{name}'...")
+        return ChatLoopResult(command=ChatCommand.MCP_RELOAD, mcp_disabled=frozenset(new_disabled))
+
+    if subcmd == "enable":
+        name = parts[2] if len(parts) > 2 else ""
+        if not name:
+            show_error("Usage: /mcp enable <nombre>")
+            return None
+        if name not in mcp_config:
+            show_error(f"Servidor '{name}' no encontrado en mcp_servers.json.")
+            return None
+        if name not in disabled_servers:
+            show_info(f"El servidor '{name}' ya está activo.")
+            return None
+        new_disabled = disabled_servers - {name}
+        show_info(f"Habilitando servidor '{name}'...")
+        return ChatLoopResult(command=ChatCommand.MCP_RELOAD, mcp_disabled=frozenset(new_disabled))
+
+    show_error(f"Subcomando desconocido: '{subcmd}'. Usa /mcp help para ver las opciones.")
+    return None
+
+
 async def chat_loop(
     agent,
     store,
@@ -155,6 +224,8 @@ async def chat_loop(
     user_id: str = "default",
     resumed: bool = False,
     current_model: str = MODEL_NAME,
+    mcp_config: dict | None = None,
+    disabled_servers: frozenset[str] = frozenset(),
 ) -> ChatLoopResult | None:
     """Run the main chat loop.
 
@@ -279,6 +350,13 @@ async def chat_loop(
             else:
                 show_error(f"Unknown subcommand: {subcmd}")
                 show_help()
+            continue
+
+        if user_input.lower().startswith("/mcp"):
+            parts = user_input.split(maxsplit=2)
+            result = await handle_mcp_command(parts, mcp_config or {}, disabled_servers)
+            if result:
+                return result
             continue
 
         if user_input.lower().startswith("/model"):
@@ -433,11 +511,29 @@ async def main() -> None:
 
     show_welcome()
 
-    mcp_config = load_mcp_servers()
-    if not mcp_config:
+    mcp_config_full = load_mcp_servers()
+    disabled_servers: frozenset[str] = frozenset()
+    if not mcp_config_full:
         show_info(
             "No MCP servers configured in mcp_servers.json. Running without MCP tools."
         )
+
+    def _active_mcp_config() -> dict:
+        return {k: v for k, v in mcp_config_full.items() if k not in disabled_servers}
+
+    def _make_mcp_client(active: dict) -> MultiServerMCPClient | None:
+        if not active:
+            return None
+        try:
+            client = MultiServerMCPClient(active)
+            server_names = list(active.keys())
+            logger.info("MCP client initialized with servers: %s", server_names)
+            show_info(f"MCP servers: {', '.join(server_names)}")
+            return client
+        except Exception as e:
+            logger.warning("Failed to initialize MCP client: %s", e)
+            show_error(f"MCP initialization failed: {e}. Continuing without MCP tools.")
+            return None
 
     checkpointer_cm, store_cm = await create_agent_resources()
 
@@ -445,18 +541,7 @@ async def main() -> None:
         await checkpointer.setup()
         await store.setup()
 
-        mcp_client = None
-        if mcp_config:
-            try:
-                mcp_client = MultiServerMCPClient(mcp_config)
-                server_names = list(mcp_config.keys())
-                logger.info("MCP client initialized with servers: %s", server_names)
-                show_info(f"MCP servers: {', '.join(server_names)}")
-            except Exception as e:
-                logger.warning("Failed to initialize MCP client: %s", e)
-                show_error(
-                    f"MCP initialization failed: {e}. Continuing without MCP tools."
-                )
+        mcp_client = _make_mcp_client(_active_mcp_config())
 
         ask_user_tool = create_ask_user_tool(_ask_user_prompt)
         current_model = MODEL_NAME
@@ -488,10 +573,28 @@ async def main() -> None:
                 thread_id,
                 resumed=is_resumed,
                 current_model=current_model,
+                mcp_config=mcp_config_full,
+                disabled_servers=disabled_servers,
             )
 
             if result is None:
                 break
+            elif result.command == ChatCommand.MCP_RELOAD:
+                disabled_servers = result.mcp_disabled
+                mcp_config_full = load_mcp_servers()
+                active = _active_mcp_config()
+                mcp_client = _make_mcp_client(active)
+                show_info("Reconstruyendo agente con nueva configuración MCP...")
+                agent, all_tools, mcp_tool_count, _ = await build_agent(
+                    mcp_client,
+                    checkpointer,
+                    store,
+                    ask_user_tool=ask_user_tool,
+                    model_name=current_model,
+                )
+                n_active = len(active)
+                show_info(f"MCP: {n_active} servidor(es) activo(s)")
+                is_resumed = True
             elif result.command == ChatCommand.MODEL:
                 current_model = result.model_name
                 show_info(f"Cambiando modelo a: {current_model}...")

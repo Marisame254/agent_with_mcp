@@ -11,6 +11,7 @@ class ChatCommand(Enum):
     NEW = "NEW"
     EXIT = "EXIT"
     MODEL = "MODEL"
+    MCP_RELOAD = "MCP_RELOAD"
 
 
 class AgentEventKind(str, Enum):

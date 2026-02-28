@@ -23,6 +23,7 @@ COMMANDS = {
     "/threads": "List and resume previous conversations",
     "/context": "Show token usage breakdown",
     "/memory": "Manage long-term memories",
+    "/mcp [subcmd]": "Gestionar servidores MCP",
     "/model [proveedor/nombre]": "Show available models or switch provider",
     "/help": "Show this help message",
     "/exit": "Exit the application",
@@ -34,6 +35,13 @@ MEMORY_SUBCOMMANDS = {
     "/memory search <query>": "Search memories by keyword",
     "/memory delete <n>": "Delete memory #n from the list",
     "/memory clear": "Delete all memories (asks confirmation)",
+}
+
+MCP_SUBCOMMANDS = {
+    "/mcp": "Listar todos los servidores configurados",
+    "/mcp enable <nombre>": "Activar un servidor deshabilitado",
+    "/mcp disable <nombre>": "Deshabilitar un servidor activo",
+    "/mcp reload": "Recargar mcp_servers.json y reconectar",
 }
 
 
@@ -120,6 +128,11 @@ def show_help() -> None:
         content.append(f"  {cmd:<28}", style="bold cyan")
         content.append(f"{desc}\n", style="dim")
 
+    content.append("\nMCP subcommands:\n\n", style="bold")
+    for cmd, desc in MCP_SUBCOMMANDS.items():
+        content.append(f"  {cmd:<28}", style="bold cyan")
+        content.append(f"{desc}\n", style="dim")
+
     console.print(Panel(content, title="Help", border_style="bright_blue", padding=(1, 2)))
     console.print()
 
@@ -134,6 +147,35 @@ def show_memories_table(memories: list[dict]) -> None:
         table.add_row(str(i), mem["text"])
 
     console.print(table)
+    console.print()
+
+
+def show_mcp_table(mcp_config: dict, disabled_servers: frozenset[str]) -> None:
+    """Display a table of configured MCP servers with their status."""
+    if not mcp_config:
+        console.print("[dim]No hay servidores MCP configurados en mcp_servers.json.[/]")
+        console.print()
+        return
+
+    table = Table(title="Servidores MCP", border_style="bright_blue")
+    table.add_column("Nombre", style="bold", width=20)
+    table.add_column("Estado", justify="center", width=14)
+    table.add_column("Transporte", style="dim", width=10)
+    table.add_column("Comando", style="dim")
+
+    for name, cfg in mcp_config.items():
+        is_disabled = name in disabled_servers
+        status = "[red]deshabilitado[/]" if is_disabled else "[green]activo[/]"
+        transport = cfg.get("transport", "")
+        command_parts = [cfg.get("command", "")] + list(cfg.get("args", []))
+        command_str = " ".join(str(p) for p in command_parts)
+        if len(command_str) > 50:
+            command_str = command_str[:47] + "..."
+        table.add_row(name, status, transport, command_str)
+
+    console.print(table)
+    active = len(mcp_config) - len(disabled_servers & mcp_config.keys())
+    console.print(f"[dim]{active} activo(s) de {len(mcp_config)} configurado(s)[/]")
     console.print()
 
 

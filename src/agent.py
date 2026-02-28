@@ -175,7 +175,14 @@ async def build_agent(
     Returns:
         Tuple of (agent, all_tools, mcp_tool_count, mcp_tool_names).
     """
-    mcp_tools = await mcp_client.get_tools() if mcp_client else []
+    mcp_tools = []
+    if mcp_client:
+        try:
+            mcp_tools = await mcp_client.get_tools()
+        except Exception as e:
+            logger.warning("Failed to get MCP tools: %s", e)
+            from src.ui import show_error  # noqa: PLC0415
+            show_error(f"No se pudieron cargar herramientas MCP: {e}. Continuando sin ellas.")
     mcp_tools = [_normalize_mcp_tool(t) for t in mcp_tools]
     base_tools = build_tools()
 
