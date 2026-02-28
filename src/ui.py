@@ -229,33 +229,79 @@ def show_mcp_table(mcp_config: dict, disabled_servers: frozenset[str]) -> None:
     console.print()
 
 
+def _build_context_blocks(breakdown: ContextBreakdown, n: int = 100) -> list[str]:
+    """Generate N colored block characters for the context grid.
+
+    Fills in order: system (dim) → tools (cyan) → memories (orange) →
+    messages (magenta) → free (dim ⛶).
+    """
+    scale = n / max(breakdown.max_tokens, 1)
+
+    categories = [
+        (breakdown.system_tokens, "dim white", "⛁"),
+        (breakdown.tools_tokens, "cyan", "⛁"),
+        (breakdown.memory_tokens, "orange1", "⛁"),
+        (breakdown.messages_tokens, "magenta", "⛁"),
+    ]
+
+    result: list[str] = []
+    for tokens, color, sym in categories:
+        for _ in range(round(tokens * scale)):
+            if len(result) < n:
+                result.append(f"[{color}]{sym}[/]")
+
+    while len(result) < n:
+        result.append("[dim]⛶[/]")
+
+    return result[:n]
+
+
 def show_context_breakdown(breakdown: ContextBreakdown) -> None:
-    """Display the context token usage breakdown."""
-    table = Table(title="Context Usage", border_style="bright_blue")
-    table.add_column("Category", style="bold")
-    table.add_column("Tokens", justify="right")
-    table.add_column("Details", style="dim")
+    """Display context usage in Claude Code style: block grid + right column."""
+    ROWS, COLS = 10, 10
 
-    table.add_row("System prompt", str(breakdown.system_tokens), "")
-    table.add_row("Memories", str(breakdown.memory_tokens), "injected from long-term store")
-    table.add_row("Messages", str(breakdown.messages_tokens), "conversation history")
-    table.add_row(
-        "Tools",
-        str(breakdown.tools_tokens),
-        f"{breakdown.mcp_tool_count} MCP tools",
-    )
-    if breakdown.summary_tokens > 0:
-        table.add_row("Summary", str(breakdown.summary_tokens), "summarized older messages")
+    def fmt(t: int) -> str:
+        return f"{t / 1000:.1f}k" if t >= 1000 else str(t)
 
-    table.add_section()
+    def pct(t: int) -> str:
+        return f"{t / breakdown.max_tokens * 100:.1f}%" if breakdown.max_tokens else "0%"
+
     color = breakdown.usage_color
-    table.add_row(
-        "[bold]Total[/]",
-        f"[{color} bold]{breakdown.total_tokens}[/]",
-        f"[{color}]{breakdown.usage_percent:.0f}% of {breakdown.max_tokens}[/]",
-    )
+    free = max(0, breakdown.max_tokens - breakdown.total_tokens)
+    model = MODEL_NAME
 
-    console.print(table)
+    right: list[str] = [
+        f"[{color}]{model} · {fmt(breakdown.total_tokens)}/{fmt(breakdown.max_tokens)} tokens ({breakdown.usage_percent:.0f}%)[/]",
+        "",
+        "[dim italic]Uso estimado por categoría[/]",
+        f"[dim white]⛁[/] System prompt: [dim]{fmt(breakdown.system_tokens)} tokens ({pct(breakdown.system_tokens)})[/]",
+        f"[cyan]⛁[/] Tools: [dim]{fmt(breakdown.tools_tokens)} tokens ({pct(breakdown.tools_tokens)}, {breakdown.mcp_tool_count} MCP)[/]",
+        f"[orange1]⛁[/] Memories: [dim]{fmt(breakdown.memory_tokens)} tokens ({pct(breakdown.memory_tokens)})[/]",
+        f"[magenta]⛁[/] Messages: [dim]{fmt(breakdown.messages_tokens)} tokens ({pct(breakdown.messages_tokens)})[/]",
+        f"[dim]⛶ Espacio libre: {fmt(free)} ({free / breakdown.max_tokens * 100:.1f}%)[/]" if breakdown.max_tokens else "",
+    ]
+    if breakdown.summary_tokens > 0:
+        right.append(
+            f"[yellow]⛁[/] Resumen activo: [dim]{fmt(breakdown.summary_tokens)} tokens ({pct(breakdown.summary_tokens)})[/]"
+        )
+
+    blocks = _build_context_blocks(breakdown, ROWS * COLS)
+
+    console.print()
+    console.print("[bold]❯[/] [dim]/context[/]")
+    console.print("  [dim]⎿[/]  [bold]Context Usage[/]")
+    console.print()
+
+    indent = "     "
+    for row in range(ROWS):
+        row_blocks = blocks[row * COLS : (row + 1) * COLS]
+        block_str = " ".join(row_blocks)
+        right_text = right[row] if row < len(right) else ""
+        if right_text:
+            console.print(f"{indent}{block_str}  {right_text}")
+        else:
+            console.print(f"{indent}{block_str}")
+
     console.print()
 
 
