@@ -72,85 +72,86 @@ async def _run_agent_turn(
     status = console.status("[dim]Thinking...[/]", spinner="dots")
     status.start()
 
-    while True:
-        needs_resume = False
-        async for event in stream_agent_turn(
-            agent,
-            store,
-            user_input,
-            thread_id,
-            user_id,
-            model_name=current_model,
-            resume_command=resume_command,
-        ):
-            if event.kind == AgentEventKind.TOOL_START:
-                if live:
-                    live.stop()
-                    live = None
+    try:
+        while True:
+            needs_resume = False
+            async for event in stream_agent_turn(
+                agent,
+                store,
+                user_input,
+                thread_id,
+                user_id,
+                model_name=current_model,
+                resume_command=resume_command,
+            ):
+                if event.kind == AgentEventKind.TOOL_START:
+                    if live:
+                        live.stop()
+                        live = None
+                        streaming_started = False
+                        streamed_text = ""
+                    status.stop()
+                    if event.tool_name == ASK_USER_TOOL_NAME:
+                        continue
+                    show_tool_start(event.tool_name, event.tool_input)
+                    status.update(f"[dim]Running {event.tool_name}...[/]")
+                    status.start()
+
+                elif event.kind == AgentEventKind.TOOL_END:
+                    status.stop()
+                    if event.tool_name != ASK_USER_TOOL_NAME:
+                        show_tool_end(event.tool_name, event.tool_output)
+                    status.update("[dim]Thinking...[/]")
+                    status.start()
+
+                elif event.kind == AgentEventKind.TOKEN:
+                    if not streaming_started:
+                        status.stop()
+                        console.print()
+                        console.print("[bold green]Assistant:[/]")
+                        live = Live(Markdown(""), console=console, refresh_per_second=8)
+                        live.start()
+                        streaming_started = True
+                    streamed_text += event.token
+                    live.update(Markdown(streamed_text))
+
+                elif event.kind == AgentEventKind.RESPONSE:
+                    response_text = event.response
+
+                elif event.kind == AgentEventKind.TOOL_APPROVAL_REQUIRED:
+                    status.stop()
+                    if live:
+                        live.stop()
+                        live = None
+                    action_requests = event.action_requests or []
+                    show_tool_approval(action_requests)
+
+                    decisions: list[dict] = []
+                    for ar in action_requests:
+                        decision_type = await prompt_tool_decision()
+                        if decision_type == "approve":
+                            decisions.append({"type": "approve"})
+                        else:
+                            reason = await prompt_reject_reason()
+                            msg = reason or (
+                                f"Usuario rechazó la ejecución de `{ar.get('name', 'unknown')}`"
+                            )
+                            decisions.append({"type": "reject", "message": msg})
+
+                    resume_command = Command(resume={"decisions": decisions})
+                    status = console.status("[bold green]Thinking...", spinner="dots")
+                    status.start()
                     streaming_started = False
                     streamed_text = ""
-                status.stop()
-                if event.tool_name == ASK_USER_TOOL_NAME:
-                    continue
-                show_tool_start(event.tool_name, event.tool_input)
-                status.update(f"[dim]Running {event.tool_name}...[/]")
-                status.start()
+                    needs_resume = True
+                    break
 
-            elif event.kind == AgentEventKind.TOOL_END:
-                status.stop()
-                if event.tool_name != ASK_USER_TOOL_NAME:
-                    show_tool_end(event.tool_name, event.tool_output)
-                status.update("[dim]Thinking...[/]")
-                status.start()
-
-            elif event.kind == AgentEventKind.TOKEN:
-                if not streaming_started:
-                    status.stop()
-                    console.print()
-                    console.print("[bold green]Assistant:[/]")
-                    live = Live(Markdown(""), console=console, refresh_per_second=8)
-                    live.start()
-                    streaming_started = True
-                streamed_text += event.token
-                live.update(Markdown(streamed_text))
-
-            elif event.kind == AgentEventKind.RESPONSE:
-                response_text = event.response
-
-            elif event.kind == AgentEventKind.TOOL_APPROVAL_REQUIRED:
-                status.stop()
-                if live:
-                    live.stop()
-                    live = None
-                action_requests = event.action_requests or []
-                show_tool_approval(action_requests)
-
-                decisions: list[dict] = []
-                for ar in action_requests:
-                    decision_type = await prompt_tool_decision()
-                    if decision_type == "approve":
-                        decisions.append({"type": "approve"})
-                    else:
-                        reason = await prompt_reject_reason()
-                        msg = reason or (
-                            f"Usuario rechazó la ejecución de `{ar.get('name', 'unknown')}`"
-                        )
-                        decisions.append({"type": "reject", "message": msg})
-
-                resume_command = Command(resume={"decisions": decisions})
-                status = console.status("[bold green]Thinking...", spinner="dots")
-                status.start()
-                streaming_started = False
-                streamed_text = ""
-                needs_resume = True
+            if not needs_resume:
                 break
-
-        if not needs_resume:
-            break
-
-    status.stop()
-    if live:
-        live.stop()
+    finally:
+        status.stop()
+        if live:
+            live.stop()
 
     return response_text
 

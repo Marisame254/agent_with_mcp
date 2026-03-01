@@ -3,7 +3,7 @@
     "transport": "stdio",
     "command": "npx",
     "args": [
-      "-y", "@modelcontextprotocol/server-filesystem", "Z:/Repositories/Personal/Lyra/.workspace"
+      "-y", "@modelcontextprotocol/server-filesystem", "."
     ]
   }
 }

@@ -30,7 +30,6 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-with-mcp = "main:run"
 lyra = "main:run"
 
 [build-system]

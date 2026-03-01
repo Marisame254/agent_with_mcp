@@ -30,7 +30,7 @@ def setup_logging() -> None:
     )
 
 MODEL_NAME: str = os.environ.get("MODEL_NAME", "kimi-k2.5:cloud")
-MAX_CONTEXT_TOKENS: int = int(os.environ.get("MAX_CONTEXT_TOKENS", "9000"))
+MAX_CONTEXT_TOKENS: int = int(os.environ.get("MAX_CONTEXT_TOKENS", "90000"))
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 
