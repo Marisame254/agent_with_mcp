@@ -105,7 +105,7 @@ def _format_tool_summary(tool_name: str, output: str) -> str:
         return f"{n} resultado(s) · {first}{suffix}" if n > 1 else f"{first}{suffix}"
 
     if any(k in name for k in ("todo", "task", "write_todo")):
-        task_lines = [l for l in lines if l.lstrip().startswith(("[", "-", "•", "*", "○", "●"))]
+        task_lines = [line for line in lines if line.lstrip().startswith(("[", "-", "•", "*", "○", "●"))]
         count = len(task_lines) if task_lines else n
         return f"{count} tarea(s)"
 

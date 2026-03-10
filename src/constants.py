@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, StrEnum
 
 
 class ChatCommand(Enum):
@@ -14,7 +14,7 @@ class ChatCommand(Enum):
     MCP_RELOAD = "MCP_RELOAD"
 
 
-class AgentEventKind(str, Enum):
+class AgentEventKind(StrEnum):
     """Event types emitted during agent streaming."""
 
     TOOL_START = "tool_start"
@@ -24,7 +24,7 @@ class AgentEventKind(str, Enum):
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
 
 
-class ThreadAction(str, Enum):
+class ThreadAction(StrEnum):
     """Actions returned by the thread management prompt."""
 
     RESUME = "resume"

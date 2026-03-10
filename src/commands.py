@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 
 from src.constants import ChatCommand
 from src.context_tracker import build_context_breakdown
@@ -25,11 +26,11 @@ from src.ui import (
     console,
     show_context_breakdown,
     show_error,
-    show_info,
-    show_memories_table,
     show_help,
-    show_models_table,
+    show_info,
     show_mcp_table,
+    show_memories_table,
+    show_models_table,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Result type — defined here to avoid circular imports with main.py
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass, field
 
 
 @dataclass

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from langchain_core.tools import tool, BaseTool
+from langchain_core.tools import BaseTool, tool
 
 from src.constants import ASK_USER_TOOL_NAME
 

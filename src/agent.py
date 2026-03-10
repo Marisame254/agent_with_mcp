@@ -8,13 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from deepagents.middleware.subagents import SubAgentMiddleware
-from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    HumanInTheLoopMiddleware,
-    SummarizationMiddleware,
-    TodoListMiddleware,
-)
+from deepagents import create_deep_agent
+from deepagents.backends import LocalShellBackend
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -25,7 +21,6 @@ from langgraph.types import Command
 
 from src.config import (
     DATABASE_URL,
-    MAX_CONTEXT_TOKENS,
     MODEL_NAME,
     TAVILY_API_KEY,
 )
@@ -179,52 +174,22 @@ async def build_agent(
 
     llm = build_llm(spec)
 
-    # Research subagent: Tavily only — no MCP tools, avoids nested HITL complexity
-    research_subagent = {
-        "name": "research",
-        "description": (
-            "A research specialist with web search access. Use for tasks that "
-            "require searching the web, synthesizing multiple sources, or deep "
-            "research on a topic."
-        ),
-        "system_prompt": (
-            "You are a research assistant. Search the web thoroughly and return "
-            "a structured, well-cited summary of your findings."
-        ),
-        "tools": base_tools,
-    }
-
-    middleware: list = [
-        TodoListMiddleware(system_prompt=""),
-        SubAgentMiddleware(
-            default_model=llm,
-            default_tools=[],
-            subagents=[research_subagent],
-        ),
-        SummarizationMiddleware(
-            model=llm,
-            trigger=("tokens", MAX_CONTEXT_TOKENS),
-            # Token-based retention avoids retaining a few large tool-output messages
-            # that could exceed the trigger threshold on their own (which would cause
-            # summarization to fire again immediately on the next turn).
-            # 50% of the trigger leaves enough headroom after summarization.
-            keep=("tokens", MAX_CONTEXT_TOKENS // 2),
-        ),
+    # HITL: always for execute (LocalShellBackend shell tool); also for MCP tools
+    # write_file and edit_file are irreversible — require approval like execute
+    hitl_tools = {"execute": True, "write_file": True, "edit_file": True}
+    hitl_tools.update({name: True for name in mcp_tool_names})
+    middleware = [
+        HumanInTheLoopMiddleware(
+            interrupt_on=hitl_tools,
+            description_prefix="Aprobación requerida para ejecutar herramienta",
+        )
     ]
 
-    # Add HITL middleware for MCP tools (require approval before execution)
-    if mcp_tool_names:
-        middleware.append(
-            HumanInTheLoopMiddleware(
-                interrupt_on={name: True for name in mcp_tool_names},
-                description_prefix="Aprobación requerida para ejecutar herramienta",
-            ),
-        )
-
-    agent = create_agent(
+    agent = create_deep_agent(
         model=llm,
         tools=all_tools,
         middleware=middleware,
+        backend=LocalShellBackend(root_dir=".", inherit_env=True),
         checkpointer=checkpointer,
         store=store,
     )
@@ -302,7 +267,7 @@ async def _stream_and_yield(
     agent: Any,
     inputs: Any,
     config: dict,
-) -> AsyncGenerator[AgentEvent, None]:
+) -> AsyncGenerator[AgentEvent]:
     """Stream events from the agent and yield parsed AgentEvents.
 
     After the event stream ends, checks for pending HITL interrupts and
@@ -365,9 +330,8 @@ async def _stream_and_yield(
             ):
                 continue
             output = event.get("data", {}).get("output")
-            if isinstance(output, AIMessage) and output.content:
-                if not streamed_tokens:
-                    response_text = output.content
+            if isinstance(output, AIMessage) and output.content and not streamed_tokens:
+                response_text = output.content
 
     # Check for pending HITL interrupts
     state = await agent.aget_state(config)
@@ -400,7 +364,7 @@ async def stream_agent_turn(
     *,
     model_name: str = MODEL_NAME,
     resume_command: Command | None = None,
-) -> AsyncGenerator[AgentEvent, None]:
+) -> AsyncGenerator[AgentEvent]:
     """Stream agent events for a single conversation turn.
 
     Retrieves relevant memories, streams tool and response events, then

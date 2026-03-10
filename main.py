@@ -13,14 +13,34 @@ from rich.live import Live
 from rich.markdown import Markdown
 
 from src.agent import build_agent, create_agent_resources, stream_agent_turn
-from src.commands import ChatLoopResult, handle_context_command, handle_mcp_command, handle_memory_command, handle_model_command
-from src.config import MAX_CONTEXT_TOKENS, MODEL_NAME, TAVILY_API_KEY, load_mcp_servers, set_api_key, setup_logging, validate_config
+from src.commands import (
+    ChatLoopResult,
+    handle_context_command,
+    handle_mcp_command,
+    handle_memory_command,
+    handle_model_command,
+)
+from src.config import (
+    MAX_CONTEXT_TOKENS,
+    MODEL_NAME,
+    TAVILY_API_KEY,
+    load_mcp_servers,
+    set_api_key,
+    setup_logging,
+    validate_config,
+)
 from src.constants import ASK_USER_TOOL_NAME, AgentEventKind, ChatCommand, ThreadAction
 from src.providers import PROVIDER_DEEPSEEK, PROVIDER_OPENAI, ModelSpec, build_llm
-from src.threads import delete_thread, generate_thread_name, get_thread_history, get_thread_messages, get_thread_name, save_thread_name
+from src.threads import (
+    delete_thread,
+    generate_thread_name,
+    get_thread_history,
+    get_thread_messages,
+    get_thread_name,
+    save_thread_name,
+)
 from src.tools import create_ask_user_tool
 from src.ui import (
-    ThreadManagementResult,
     console,
     create_prompt_session,
     prompt_reject_reason,
