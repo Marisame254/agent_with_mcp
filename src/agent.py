@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import LocalShellBackend
+from deepagents.backends import CompositeBackend, LocalShellBackend, StoreBackend
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_tavily import TavilySearch
@@ -26,18 +26,13 @@ from src.config import (
     TAVILY_API_KEY,
 )
 from src.constants import (
+    AGENT_MEMORY_FILE,
     AGENT_RECURSION_LIMIT,
     SUMMARIZATION_NODE_NAME,
     TAVILY_MAX_RESULTS,
     TOOL_INPUT_DISPLAY_LIMIT,
     TOOL_OUTPUT_DISPLAY_LIMIT,
     AgentEventKind,
-)
-from src.memory import (
-    extract_memories,
-    format_memories_for_prompt,
-    retrieve_memories,
-    store_memories,
 )
 from src.prompts import SYSTEM_PROMPT_TEMPLATE
 from src.providers import ModelSpec, build_llm
@@ -85,25 +80,6 @@ def get_system_prompt() -> str:
     """Build the base system prompt with the current date and time injected."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return SYSTEM_PROMPT_TEMPLATE.format(current_time=now, cwd=os.getcwd())
-
-
-def build_system_prompt(memories: list[str] | None = None) -> str:
-    """Build the full system prompt, optionally including user memories.
-
-    Combines the base system prompt with formatted memories into a single
-    unified prompt, avoiding multiple SystemMessage injections.
-
-    Args:
-        memories: Optional list of memory text strings to include.
-
-    Returns:
-        The complete system prompt string.
-    """
-    base = get_system_prompt()
-    memory_block = format_memories_for_prompt(memories or [])
-    if not memory_block:
-        return base
-    return f"{base}\n\nYou remember the following about this user:\n{memory_block}"
 
 
 async def create_agent_resources() -> tuple[AsyncPostgresSaver, AsyncPostgresStore]:
@@ -189,11 +165,16 @@ async def build_agent(
 
     agent = create_deep_agent(
         model=llm,
+        system_prompt=get_system_prompt(),
         tools=all_tools,
         middleware=middleware,
-        backend=LocalShellBackend(root_dir=".", inherit_env=True),
+        backend=lambda rt: CompositeBackend(
+            default=LocalShellBackend(root_dir=".", inherit_env=True),
+            routes={"/memories/": StoreBackend(rt)},
+        ),
         checkpointer=checkpointer,
         store=store,
+        memory=[AGENT_MEMORY_FILE],
     )
 
     return agent, all_tools, mcp_tool_count, mcp_tool_names
@@ -210,59 +191,6 @@ class AgentEvent:
     response: str = ""
     token: str = ""
     action_requests: list[dict[str, Any]] | None = None
-
-
-async def _retrieve_and_build_messages(
-    store: AsyncPostgresStore,
-    user_message: str,
-    user_id: str,
-) -> list[SystemMessage | HumanMessage]:
-    """Retrieve memories and build the message list for a single turn.
-
-    Builds a single unified SystemMessage containing the base system prompt
-    plus any retrieved memories, followed by the user's HumanMessage.
-
-    Args:
-        store: The backing store for memory retrieval.
-        user_message: The user's current input.
-        user_id: The user identifier for memory lookup.
-
-    Returns:
-        List of messages to send to the agent.
-    """
-    memories = await retrieve_memories(store, user_id, user_message)
-    system_prompt = build_system_prompt(memories)
-
-    return [
-        SystemMessage(content=system_prompt, id="system_prompt"),
-        HumanMessage(content=user_message),
-    ]
-
-
-async def _extract_and_store_memories(
-    store: AsyncPostgresStore,
-    user_message: str,
-    response_text: str,
-    user_id: str,
-    model_name: str = MODEL_NAME,
-) -> None:
-    """Extract and persist memories from a completed turn (best-effort).
-
-    Args:
-        store: The backing store for memory persistence.
-        user_message: The user's input that triggered the response.
-        response_text: The agent's final text response.
-        user_id: The user identifier for memory storage.
-        model_name: Model identifier (``provider/name`` or bare Ollama name).
-    """
-    try:
-        llm = build_llm(ModelSpec.parse(model_name))
-        new_memories = await extract_memories(llm, user_message, response_text)
-        if new_memories:
-            await store_memories(store, user_id, new_memories)
-            logger.info("Stored %d new memories for user=%s", len(new_memories), user_id)
-    except Exception:
-        logger.debug("Memory extraction failed", exc_info=True)
 
 
 async def _stream_and_yield(
@@ -303,7 +231,9 @@ async def _stream_and_yield(
         elif kind == "on_tool_end":
             tool_name = event.get("name", "unknown")
             output = str(event.get("data", {}).get("output", ""))
-            if len(output) > TOOL_OUTPUT_DISPLAY_LIMIT:
+            # Don't truncate todo tools so the UI can show the full task list
+            is_todo = any(k in tool_name.lower() for k in ("todo", "write_todo"))
+            if not is_todo and len(output) > TOOL_OUTPUT_DISPLAY_LIMIT:
                 output = output[:TOOL_OUTPUT_DISPLAY_LIMIT] + "..."
             yield AgentEvent(
                 kind=AgentEventKind.TOOL_END,
@@ -359,29 +289,25 @@ async def _stream_and_yield(
 
 async def stream_agent_turn(
     agent: Any,
-    store: AsyncPostgresStore,
     user_message: str,
     thread_id: str,
-    user_id: str = "default",
     *,
-    model_name: str = MODEL_NAME,
     resume_command: Command | None = None,
 ) -> AsyncGenerator[AgentEvent]:
     """Stream agent events for a single conversation turn.
 
-    Retrieves relevant memories, streams tool and response events, then
-    persists any new memories extracted from the exchange.
+    Memory is managed by the agent itself via the CompositeBackend:
+    ``/memories/`` paths are routed to a persistent StoreBackend, and
+    the ``memory`` parameter on ``create_deep_agent`` auto-loads
+    ``AGENT.md`` into the system prompt each turn.
 
     When *resume_command* is provided the agent is resumed from a HITL
     interrupt instead of starting a new turn.
 
     Args:
         agent: The LangGraph agent instance.
-        store: The backing store for memories.
         user_message: The user's current input.
         thread_id: Conversation thread identifier.
-        user_id: The user identifier.
-        model_name: Model identifier used for memory extraction.
         resume_command: Optional Command to resume from a HITL interrupt.
 
     Yields:
@@ -395,16 +321,7 @@ async def stream_agent_turn(
     if resume_command is not None:
         inputs = resume_command
     else:
-        messages = await _retrieve_and_build_messages(store, user_message, user_id)
-        inputs = {"messages": messages}
+        inputs = {"messages": [HumanMessage(content=user_message)]}
 
-    response_text = ""
     async for event in _stream_and_yield(agent, inputs, config):
-        if event.kind == AgentEventKind.RESPONSE:
-            response_text = event.response
         yield event
-
-    if response_text:
-        await _extract_and_store_memories(
-            store, user_message, response_text, user_id, model_name=model_name
-        )

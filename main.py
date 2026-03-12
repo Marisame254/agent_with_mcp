@@ -103,11 +103,8 @@ async def _run_agent_turn(
             needs_resume = False
             async for event in stream_agent_turn(
                 agent,
-                store,
                 user_input,
                 thread_id,
-                user_id,
-                model_name=current_model,
                 resume_command=resume_command,
             ):
                 if event.kind == AgentEventKind.TOOL_START:
@@ -344,13 +341,21 @@ async def chat_loop(
 
             if is_new_thread:
                 is_new_thread = False
-                try:
-                    llm = build_llm(ModelSpec.parse(current_model))
-                    name = await generate_thread_name(llm, user_input)
-                    await save_thread_name(store, thread_id, name)
-                    show_info(f"Thread: {name}")
-                except Exception:
-                    logger.debug("Failed to save thread name", exc_info=True)
+
+                async def _save_thread_name_bg(
+                    model: str, msg: str, tid: str, st: object,
+                ) -> None:
+                    try:
+                        _llm = build_llm(ModelSpec.parse(model))
+                        name = await generate_thread_name(_llm, msg)
+                        await save_thread_name(st, tid, name)
+                        show_info(f"Thread: {name}")
+                    except Exception:
+                        logger.debug("Failed to save thread name", exc_info=True)
+
+                asyncio.create_task(
+                    _save_thread_name_bg(current_model, user_input, thread_id, store)
+                )
         else:
             show_error("No response from agent.")
 

@@ -38,24 +38,27 @@ Skip the todo list for simple single-step requests.
 Delegate work to specialized subagents via the `task` tool:
 - `research` — web research requiring multiple searches or deep synthesis of online sources.
 - `general` — any task that benefits from running in an isolated context window.
-Keep your main context focused; delegate when it improves quality or reduces bloat."""
+Keep your main context focused; delegate when it improves quality or reduces bloat.
 
-EXTRACT_MEMORIES_PROMPT = """You are a memory extraction assistant. Given a conversation exchange, extract any facts worth remembering about the user for future conversations.
+## Long-term memory
+You have a persistent memory file at `/memories/AGENT.md`. This file is automatically loaded \
+at the start of every conversation. Use it to remember important information across sessions.
 
-Examples of useful facts:
-- User's name, location, profession
-- User's preferences and interests
-- Important context about their projects or goals
-- Technical preferences (languages, tools, frameworks)
+**When to update your memory:**
+- When the user shares personal info (name, role, preferences, tech stack)
+- When you learn project context that would be useful in future conversations
+- When the user explicitly asks you to remember something
+- When you discover patterns or conventions in the codebase
 
-If there are no facts worth remembering, respond with exactly: NONE
+**How to organize `/memories/AGENT.md`:**
+Use clear markdown sections:
+- `## User` — who the user is, their role, preferences
+- `## Project` — project context, architecture decisions, ongoing work
+- `## Preferences` — coding style, language preferences, tools they use
+- `## Notes` — anything else worth remembering
 
-Otherwise, respond with one fact per line, nothing else. Be concise.
-
-User said: {user_message}
-Assistant said: {assistant_message}
-
-Facts to remember:"""
+Use the `edit_file` tool to update specific sections. Read the file first to avoid overwriting existing content.
+Do NOT update memory on every turn — only when genuinely new, useful information emerges."""
 
 THREAD_NAME_PROMPT = (
     "Resume en máximo 5 palabras de qué trata este mensaje. "

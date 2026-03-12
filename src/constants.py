@@ -64,6 +64,9 @@ MEMORY_MAX_RESULTS: int = 5
 # Memory store
 MEMORY_NAMESPACE: tuple[str, ...] = ("memories",)
 
+# Agent long-term memory (CompositeBackend / StoreBackend)
+AGENT_MEMORY_FILE: str = "/memories/AGENT.md"
+
 # Thread names
 THREAD_NAMES_NAMESPACE: tuple[str, ...] = ("thread_names",)
 

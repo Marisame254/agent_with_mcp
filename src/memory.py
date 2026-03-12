@@ -1,43 +1,22 @@
-"""Long-term memory extraction and retrieval using PostgresStore."""
+"""Long-term memory management using PostgresStore.
+
+Legacy functions (list/delete/clear/store/retrieve) operate on the old
+``("memories", user_id)`` namespace used before the CompositeBackend migration.
+They are kept for the ``/memory`` CLI command so users can inspect and clean up
+old memories.  New memories are managed by the agent itself via the
+``/memories/AGENT.md`` file routed through ``StoreBackend``.
+"""
 
 from __future__ import annotations
 
 import logging
 import uuid
 
-from langchain_core.language_models import BaseChatModel
 from langgraph.store.base import BaseStore
 
 from src.constants import MEMORY_MAX_RESULTS, MEMORY_NAMESPACE
-from src.prompts import EXTRACT_MEMORIES_PROMPT
 
 logger = logging.getLogger(__name__)
-
-
-async def extract_memories(
-    llm: BaseChatModel,
-    user_message: str,
-    assistant_message: str,
-) -> list[str]:
-    """Extract memorable facts from a conversation exchange.
-
-    Args:
-        llm: The language model used for extraction.
-        user_message: The user's message text.
-        assistant_message: The assistant's response text.
-
-    Returns:
-        List of extracted fact strings. Empty if nothing worth remembering.
-    """
-    prompt = EXTRACT_MEMORIES_PROMPT.format(
-        user_message=user_message,
-        assistant_message=assistant_message,
-    )
-    response = await llm.ainvoke(prompt)
-    text = response.content.strip()
-    if not text or text.upper() == "NONE":
-        return []
-    return [line.strip("- ").strip() for line in text.splitlines() if line.strip()]
 
 
 async def store_memories(
@@ -145,17 +124,3 @@ async def clear_memories(
         await store.adelete((*MEMORY_NAMESPACE, user_id), item.key)
         count += 1
     return count
-
-
-def format_memories_for_prompt(memories: list[str]) -> str:
-    """Format retrieved memories into a plain bullet list.
-
-    Args:
-        memories: List of memory text strings.
-
-    Returns:
-        Bullet-list string of memories, or empty string if none.
-    """
-    if not memories:
-        return ""
-    return "\n".join(f"- {m}" for m in memories)

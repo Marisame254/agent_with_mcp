@@ -106,8 +106,9 @@ def _format_tool_summary(tool_name: str, output: str) -> str:
 
     if any(k in name for k in ("todo", "task", "write_todo")):
         task_lines = [line for line in lines if line.lstrip().startswith(("[", "-", "•", "*", "○", "●"))]
-        count = len(task_lines) if task_lines else n
-        return f"{count} tarea(s)"
+        if not task_lines:
+            return f"{n} tarea(s)"
+        return "\n".join(line.strip() for line in task_lines)
 
     if any(k in name for k in ("read", "get", "fetch", "load", "open")):
         return f"{n} línea(s)" if n > 1 else (stripped[:80] + "…" if len(stripped) > 80 else stripped)
@@ -132,7 +133,13 @@ def show_tool_start(tool_name: str, tool_input: str = "") -> None:
 def show_tool_end(tool_name: str, tool_output: str = "") -> None:
     """Display a tool result in Claude Code style: ⎿  summary"""
     summary = _format_tool_summary(tool_name, tool_output)
-    console.print(f"  [dim]⎿  {summary}[/]")
+    if "\n" in summary:
+        first, *rest = summary.split("\n")
+        console.print(f"  [dim]⎿  {first}[/]")
+        for line in rest:
+            console.print(f"  [dim]   {line}[/]")
+    else:
+        console.print(f"  [dim]⎿  {summary}[/]")
     console.print()
 
 
