@@ -10,14 +10,13 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, LocalShellBackend, StoreBackend
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_tavily import TavilySearch
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
-from langgraph.types import Command
+from langgraph.types import Command, Overwrite
 
 from src.config import (
     DATABASE_URL,
@@ -37,6 +36,13 @@ from src.prompts import SYSTEM_PROMPT_TEMPLATE
 from src.providers import ModelSpec, build_llm
 
 logger = logging.getLogger(__name__)
+
+
+def _unwrap(value: Any) -> Any:
+    """Recursively unwrap LangGraph ``Overwrite`` wrappers."""
+    while isinstance(value, Overwrite):
+        value = value.value
+    return value
 
 
 def _content_blocks_to_str(blocks: list) -> str:
@@ -76,8 +82,11 @@ def _normalize_mcp_tool(tool: BaseTool) -> BaseTool:
 
 
 def get_system_prompt() -> str:
-    """Build the base system prompt with the current date and time injected."""
+    """Build the base system prompt with the current date/time and working directory."""
+    # import os
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # cwd = os.getcwd()
     return SYSTEM_PROMPT_TEMPLATE.format(current_time=now)
 
 
@@ -108,7 +117,7 @@ async def build_agent(
     ask_user_tool: BaseTool | None = None,
     model_name: str = MODEL_NAME,
 ) -> tuple[Any, list, int, list[str]]:
-    """Create the agent with all tools and HITL middleware for MCP tools.
+    """Create the agent with all tools and HITL interrupt configuration.
 
     Args:
         mcp_client: Optional MCP client for external tool servers.
@@ -153,20 +162,14 @@ async def build_agent(
 
     # HITL: always for execute (LocalShellBackend shell tool); also for MCP tools
     # write_file and edit_file are irreversible — require approval like execute
-    hitl_tools = {"execute": True, "write_file": True, "edit_file": True}
+    hitl_tools: dict[str, bool] = {"execute": True, "write_file": True, "edit_file": True}
     hitl_tools.update({name: True for name in mcp_tool_names})
-    middleware = [
-        HumanInTheLoopMiddleware(
-            interrupt_on=hitl_tools,
-            description_prefix="Aprobación requerida para ejecutar herramienta",
-        )
-    ]
 
     agent = create_deep_agent(
         model=llm,
         system_prompt=get_system_prompt(),
         tools=all_tools,
-        middleware=middleware,
+        interrupt_on=hitl_tools,
         backend=lambda rt: CompositeBackend(
             default=LocalShellBackend(root_dir=".", inherit_env=True),
             routes={"/memories/": StoreBackend(rt)},
@@ -174,6 +177,7 @@ async def build_agent(
         checkpointer=checkpointer,
         store=store,
         memory=[AGENT_MEMORY_FILE],
+        name="Lyra Code Assistant",
     )
 
     return agent, all_tools, mcp_tool_count, mcp_tool_names
@@ -190,86 +194,145 @@ class AgentEvent:
     response: str = ""
     token: str = ""
     action_requests: list[dict[str, Any]] | None = None
+    is_subagent: bool = False
 
 
 async def _stream_and_yield(
     agent: Any,
     inputs: Any,
     config: dict,
+    seen_tool_call_ids: set[str] | None = None,
 ) -> AsyncGenerator[AgentEvent]:
-    """Stream events from the agent and yield parsed AgentEvents.
+    """Stream events from the agent using the graph-level streaming API.
 
-    After the event stream ends, checks for pending HITL interrupts and
-    yields a ``TOOL_APPROVAL_REQUIRED`` event if any are found.
+    Uses ``astream`` with multiple stream modes (messages, updates, custom)
+    and ``subgraphs=True`` to capture subagent activity and custom progress
+    events from tools.
+
+    HITL interrupts are detected inline from ``updates`` chunks containing
+    ``__interrupt__``, with a fallback to ``aget_state()`` post-stream.
 
     Args:
-        agent: The LangGraph agent instance.
-        inputs: The inputs to pass to ``astream_events`` (messages dict or Command).
-        config: The LangGraph config with thread_id.
+        agent: The LangGraph ``CompiledStateGraph`` returned by ``create_deep_agent``.
+        inputs: Messages dict or ``Command`` for HITL resume.
+        config: LangGraph config with ``thread_id``.
 
     Yields:
         AgentEvent instances.
     """
     response_text = ""
-    streamed_tokens = False
+    found_interrupt = False
+    if seen_tool_call_ids is None:
+        seen_tool_call_ids = set()
 
-    async for event in agent.astream_events(inputs, config=config, version="v2"):
-        kind = event.get("event", "")
+    # astream with list stream_mode + subgraphs=True yields tuples: (ns, mode, data)
+    async for ns, chunk_type, data in agent.astream(
+        inputs,
+        config=config,
+        stream_mode=["messages", "updates", "custom"],
+        subgraphs=True,
+    ):
+        is_subagent = any(seg.startswith("tools:") for seg in ns)
 
-        if kind == "on_tool_start":
-            tool_name = event.get("name", "unknown")
-            tool_input = str(event.get("data", {}).get("input", ""))
-            if len(tool_input) > TOOL_INPUT_DISPLAY_LIMIT:
-                tool_input = tool_input[:TOOL_INPUT_DISPLAY_LIMIT] + "..."
-            yield AgentEvent(
-                kind=AgentEventKind.TOOL_START,
-                tool_name=tool_name,
-                tool_input=tool_input,
-            )
+        if chunk_type == "messages":
+            token, metadata = data
 
-        elif kind == "on_tool_end":
-            tool_name = event.get("name", "unknown")
-            output = str(event.get("data", {}).get("output", ""))
-            # Don't truncate todo tools so the UI can show the full task list
-            is_todo = any(k in tool_name.lower() for k in ("todo", "write_todo"))
-            if not is_todo and len(output) > TOOL_OUTPUT_DISPLAY_LIMIT:
-                output = output[:TOOL_OUTPUT_DISPLAY_LIMIT] + "..."
-            yield AgentEvent(
-                kind=AgentEventKind.TOOL_END,
-                tool_name=tool_name,
-                tool_output=output,
-            )
-
-        elif kind == "on_chat_model_stream":
-            if (
-                event.get("metadata", {}).get("langgraph_node")
-                == SUMMARIZATION_NODE_NAME
-            ):
+            # Filter out summarization middleware tokens
+            node = metadata.get("langgraph_node", "")
+            if node == SUMMARIZATION_NODE_NAME:
                 continue
-            chunk = event.get("data", {}).get("chunk")
-            if hasattr(chunk, "content") and chunk.content:
-                content = chunk.content
-                if isinstance(content, str) and content:
-                    response_text += content
-                    streamed_tokens = True
-                    yield AgentEvent(kind=AgentEventKind.TOKEN, token=content)
 
-        elif kind == "on_chat_model_end":
-            if (
-                event.get("metadata", {}).get("langgraph_node")
-                == SUMMARIZATION_NODE_NAME
-            ):
+            # Text tokens (main agent or subagent)
+            if hasattr(token, "content") and isinstance(token.content, str) and token.content:
+                event_kind = AgentEventKind.SUBAGENT_TOKEN if is_subagent else AgentEventKind.TOKEN
+                if not is_subagent:
+                    response_text += token.content
+                yield AgentEvent(kind=event_kind, token=token.content)
+
+            # Tool result messages
+            if getattr(token, "type", None) == "tool":
+                tool_name = getattr(token, "name", "unknown")
+                output = str(token.content) if token.content else "(no output)"
+                is_todo = any(k in tool_name.lower() for k in ("todo", "write_todo"))
+                if not is_todo and len(output) > TOOL_OUTPUT_DISPLAY_LIMIT:
+                    output = output[:TOOL_OUTPUT_DISPLAY_LIMIT] + "..."
+                yield AgentEvent(
+                    kind=AgentEventKind.TOOL_END,
+                    tool_name=tool_name,
+                    tool_output=output,
+                    is_subagent=is_subagent,
+                )
+
+        elif chunk_type == "updates":
+            data = _unwrap(data)
+            if not isinstance(data, dict):
                 continue
-            output = event.get("data", {}).get("output")
-            if isinstance(output, AIMessage) and output.content and not streamed_tokens:
-                response_text = output.content
 
-    # Check for pending HITL interrupts
-    state = await agent.aget_state(config)
-    if state and state.tasks:
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
+            # Detect tool calls from the agent node's AIMessage (top-level only)
+            if not is_subagent:
+                for node_name, node_output in data.items():
+                    if node_name.startswith("__"):
+                        continue
+                    node_output = _unwrap(node_output)
+                    if not isinstance(node_output, dict):
+                        continue
+                    messages = _unwrap(node_output.get("messages", []))
+                    if not isinstance(messages, list):
+                        continue
+                    # Only check the LAST AIMessage — updates may contain full
+                    # history via Overwrite; older messages would replay old tools.
+                    last_ai = next(
+                        (m for m in reversed(messages) if isinstance(m, AIMessage)),
+                        None,
+                    )
+                    if not last_ai or not getattr(last_ai, "tool_calls", None):
+                        continue
+                    for tc in last_ai.tool_calls:
+                            tc_id = tc.get("id", "")
+                            if tc_id and tc_id in seen_tool_call_ids:
+                                continue
+                            if tc_id:
+                                seen_tool_call_ids.add(tc_id)
+                            tool_input = str(tc.get("args", ""))
+                            if len(tool_input) > TOOL_INPUT_DISPLAY_LIMIT:
+                                tool_input = tool_input[:TOOL_INPUT_DISPLAY_LIMIT] + "..."
+                            yield AgentEvent(
+                                kind=AgentEventKind.TOOL_START,
+                                tool_name=tc.get("name", "unknown"),
+                                tool_input=tool_input,
+                            )
+
+            # Detect HITL interrupts inline (Interrupt is a dataclass with .value)
+            if "__interrupt__" in data:
                 action_requests: list[dict[str, Any]] = []
+                for intr in data["__interrupt__"]:
+                    value = intr.value if hasattr(intr, "value") else intr
+                    if isinstance(value, dict):
+                        for ar in value.get("action_requests", []):
+                            action_requests.append(dict(ar))
+                if action_requests:
+                    found_interrupt = True
+                    yield AgentEvent(
+                        kind=AgentEventKind.TOOL_APPROVAL_REQUIRED,
+                        action_requests=action_requests,
+                    )
+                    return
+
+        elif chunk_type == "custom":
+            # Progress events emitted by tools via get_stream_writer()
+            yield AgentEvent(
+                kind=AgentEventKind.CUSTOM_PROGRESS,
+                tool_output=str(data),
+            )
+
+    # Fallback: check aget_state for HITL interrupts not caught inline
+    if not found_interrupt:
+        state = await agent.aget_state(config)
+        if state and state.tasks:
+            for task in state.tasks:
+                if not (hasattr(task, "interrupts") and task.interrupts):
+                    continue
+                action_requests = []
                 for intr in task.interrupts:
                     value = intr.value
                     if isinstance(value, dict):
@@ -280,7 +343,7 @@ async def _stream_and_yield(
                         kind=AgentEventKind.TOOL_APPROVAL_REQUIRED,
                         action_requests=action_requests,
                     )
-                    return  # Don't emit RESPONSE — waiting for approval
+                    return
 
     if response_text:
         yield AgentEvent(kind=AgentEventKind.RESPONSE, response=response_text)
@@ -292,6 +355,7 @@ async def stream_agent_turn(
     thread_id: str,
     *,
     resume_command: Command | None = None,
+    seen_tool_call_ids: set[str] | None = None,
 ) -> AsyncGenerator[AgentEvent]:
     """Stream agent events for a single conversation turn.
 
@@ -308,6 +372,8 @@ async def stream_agent_turn(
         user_message: The user's current input.
         thread_id: Conversation thread identifier.
         resume_command: Optional Command to resume from a HITL interrupt.
+        seen_tool_call_ids: Set of tool call IDs already displayed, to avoid
+            duplicates across HITL resume cycles.
 
     Yields:
         AgentEvent instances for tool starts, tool ends, and the final response.
@@ -322,5 +388,5 @@ async def stream_agent_turn(
     else:
         inputs = {"messages": [HumanMessage(content=user_message)]}
 
-    async for event in _stream_and_yield(agent, inputs, config):
+    async for event in _stream_and_yield(agent, inputs, config, seen_tool_call_ids):
         yield event

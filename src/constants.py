@@ -22,6 +22,8 @@ class AgentEventKind(StrEnum):
     TOKEN = "token"
     RESPONSE = "response"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
+    SUBAGENT_TOKEN = "subagent_token"
+    CUSTOM_PROGRESS = "custom_progress"
 
 
 class ThreadAction(StrEnum):

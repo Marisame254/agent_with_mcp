@@ -95,6 +95,10 @@ async def _run_agent_turn(
     streamed_text = ""
     live: Live | None = None
     resume_command: Command | None = None
+    subagent_tool_count = 0
+    in_subagent = False
+    suppress_tokens = False
+    seen_tool_ids: set[str] = set()
     status = console.status("[dim]Thinking...[/]", spinner="dots")
     status.start()
 
@@ -106,6 +110,7 @@ async def _run_agent_turn(
                 user_input,
                 thread_id,
                 resume_command=resume_command,
+                seen_tool_call_ids=seen_tool_ids,
             ):
                 if event.kind == AgentEventKind.TOOL_START:
                     if live:
@@ -117,26 +122,56 @@ async def _run_agent_turn(
                     if event.tool_name == ASK_USER_TOOL_NAME:
                         continue
                     show_tool_start(event.tool_name, event.tool_input)
+                    # Track subagent lifecycle via 'task' tool
+                    if event.tool_name == "task":
+                        in_subagent = True
+                        subagent_tool_count = 0
                     status.update(f"[dim]Running {event.tool_name}...[/]")
                     status.start()
 
                 elif event.kind == AgentEventKind.TOOL_END:
+                    suppress_tokens = False
                     status.stop()
-                    if event.tool_name != ASK_USER_TOOL_NAME:
+                    if event.is_subagent:
+                        # Compact display for subagent tools: just count them
+                        subagent_tool_count += 1
+                        status.update(
+                            f"[dim]Subagent running... ({subagent_tool_count} tool uses)[/]"
+                        )
+                        status.start()
+                    elif event.tool_name == "task" and in_subagent:
+                        # Subagent finished — show compact summary
+                        console.print(
+                            f"  [dim]⎿  Done ({subagent_tool_count} tool uses)[/]"
+                        )
+                        in_subagent = False
+                        subagent_tool_count = 0
+                    elif event.tool_name != ASK_USER_TOOL_NAME:
                         show_tool_end(event.tool_name, event.tool_output)
-                    status.update("[dim]Thinking...[/]")
-                    status.start()
+                    # Don't restart spinner here — next TOOL_START or TOKEN
+                    # will handle its own display, avoiding spinner bleed.
+
+                elif event.kind == AgentEventKind.SUBAGENT_TOKEN:
+                    # Suppress subagent text — activity shown via tool count
+                    pass
 
                 elif event.kind == AgentEventKind.TOKEN:
+                    if suppress_tokens:
+                        continue
                     if not streaming_started:
                         status.stop()
                         console.print()
-                        console.print("[bold green]Assistant:[/]")
+                        streamed_text = ""
                         live = Live(Markdown(""), console=console, refresh_per_second=8)
                         live.start()
                         streaming_started = True
                     streamed_text += event.token
                     live.update(Markdown(streamed_text))
+
+                elif event.kind == AgentEventKind.CUSTOM_PROGRESS:
+                    status.stop()
+                    console.print(f"[dim]  > {event.tool_output}[/]")
+                    status.start()
 
                 elif event.kind == AgentEventKind.RESPONSE:
                     response_text = event.response
@@ -146,6 +181,7 @@ async def _run_agent_turn(
                     if live:
                         live.stop()
                         live = None
+                    console.print()  # Clean line after spinner
                     action_requests = event.action_requests or []
                     show_tool_approval(action_requests)
 
@@ -162,10 +198,13 @@ async def _run_agent_turn(
                             decisions.append({"type": "reject", "message": msg})
 
                     resume_command = Command(resume={"decisions": decisions})
-                    status = console.status("[bold green]Thinking...", spinner="dots")
+                    status = console.status("[dim]Thinking...[/]", spinner="dots")
                     status.start()
                     streaming_started = False
                     streamed_text = ""
+                    in_subagent = False
+                    subagent_tool_count = 0
+                    suppress_tokens = True
                     needs_resume = True
                     break
 
