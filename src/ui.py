@@ -368,6 +368,151 @@ def show_conversation_history(messages: list) -> None:
     console.print()
 
 
+def prompt_option_selection(
+    question: str,
+    options: list[dict],
+    multi_select: bool = False,
+) -> str:
+    """Interactive option selector using prompt_toolkit Application.
+
+    Args:
+        question: The question to display as header.
+        options: List of ``{"title": str, "description": str | None}`` dicts.
+        multi_select: Allow multiple selections when True.
+
+    Returns:
+        Comma-separated titles of selected options, free-text input,
+        or ``"(cancelado por el usuario)"`` on Esc.
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout.containers import HSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.layout import Layout
+
+    # Append "Escribir respuesta..." as the last option
+    items = [*options, {"title": "Escribir respuesta...", "_free_text": True}]
+    cursor = [0]
+    checked: set[int] = set()
+    result: list[str] = []
+    cancelled = [False]
+
+    def _get_body() -> FormattedText:
+        fragments: list[tuple[str, str]] = []
+        fragments.append(("bold fg:yellow", f"  {question}\n\n"))
+        for i, item in enumerate(items):
+            is_cur = i == cursor[0]
+            is_free = item.get("_free_text", False)
+            title = item.get("title", "")
+            desc = item.get("description", "")
+
+            prefix = ") " if is_cur else "  "
+            num = f"{i + 1}. "
+
+            mark = ("[✓] " if i in checked else "[ ] ") if multi_select else ""
+
+            # Title line
+            title_style = "bold" if is_cur else ""
+            if is_free:
+                title_style += " italic fg:ansigray"
+            fragments.append(("", prefix))
+            fragments.append(("fg:ansicyan", num))
+            fragments.append((title_style.strip(), f"{mark}{title}\n"))
+
+            # Description line
+            if desc and not is_free:
+                fragments.append(("fg:ansigray", f"     {desc}\n"))
+
+        # Status bar
+        fragments.append(("", "\n"))
+        if multi_select:
+            fragments.append(
+                ("fg:ansigray italic",
+                 "  Enter confirmar · Space toggle · ↑↓ navegar · Esc cancelar")
+            )
+        else:
+            fragments.append(
+                ("fg:ansigray italic",
+                 "  Enter seleccionar · ↑↓ navegar · Esc cancelar")
+            )
+        return FormattedText(fragments)
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    @kb.add("s-tab")
+    def _up(event) -> None:  # noqa: ANN001
+        cursor[0] = (cursor[0] - 1) % len(items)
+
+    @kb.add("down")
+    @kb.add("tab")
+    def _down(event) -> None:  # noqa: ANN001
+        cursor[0] = (cursor[0] + 1) % len(items)
+
+    @kb.add("space")
+    def _toggle(event) -> None:  # noqa: ANN001
+        if not multi_select:
+            return
+        idx = cursor[0]
+        # Don't toggle the free-text option
+        if items[idx].get("_free_text"):
+            return
+        if idx in checked:
+            checked.discard(idx)
+        else:
+            checked.add(idx)
+
+    @kb.add("enter")
+    def _select(event) -> None:  # noqa: ANN001
+        idx = cursor[0]
+        if multi_select:
+            # In multi-select, Enter confirms checked items (or free-text if selected)
+            if items[idx].get("_free_text") and idx in checked:
+                # Free text was toggled — treat like single select free-text
+                result.append("__free_text__")
+            elif items[idx].get("_free_text") and not checked:
+                # Nothing checked and cursor on free-text — go to free text
+                result.append("__free_text__")
+            elif checked:
+                for ci in sorted(checked):
+                    result.append(items[ci]["title"])
+            elif items[idx].get("_free_text"):
+                result.append("__free_text__")
+            else:
+                # Nothing checked — select current item
+                result.append(items[idx]["title"])
+        else:
+            if items[idx].get("_free_text"):
+                result.append("__free_text__")
+            else:
+                result.append(items[idx]["title"])
+        event.app.exit()
+
+    @kb.add("escape")
+    def _cancel(event) -> None:  # noqa: ANN001
+        cancelled[0] = True
+        event.app.exit()
+
+    body = Window(content=FormattedTextControl(_get_body), wrap_lines=True)
+    layout = Layout(HSplit([body]))
+    app: Application[None] = Application(layout=layout, key_bindings=kb, full_screen=False)
+    app.run()
+
+    if cancelled[0]:
+        return "(cancelado por el usuario)"
+
+    if result == ["__free_text__"]:
+        # Fall back to plain text input
+        try:
+            answer = input("Tu respuesta> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return "(sin respuesta)"
+        return answer or "(sin respuesta)"
+
+    return ", ".join(result) if result else "(sin respuesta)"
+
+
 def show_agent_question(question: str) -> None:
     """Display a question from the agent that requires user input."""
     console.print()

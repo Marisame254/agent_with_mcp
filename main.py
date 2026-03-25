@@ -49,6 +49,7 @@ from src.tools import create_ask_user_tool
 from src.ui import (
     console,
     create_prompt_session,
+    prompt_option_selection,
     prompt_reject_reason,
     prompt_thread_management,
     prompt_tool_decision,
@@ -66,10 +67,20 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-async def _ask_user_prompt(question: str) -> str:
+async def _ask_user_prompt(
+    question: str,
+    options: list[dict] | None = None,
+    multi_select: bool = False,
+) -> str:
     """Prompt handler for the ask_user tool."""
-    show_agent_question(question)
     loop = asyncio.get_running_loop()
+    if options:
+        return await loop.run_in_executor(
+            None,
+            lambda: prompt_option_selection(question, options, multi_select),
+        )
+    # Fallback: plain text input (current behavior)
+    show_agent_question(question)
     try:
         answer = await loop.run_in_executor(None, lambda: input("Tu respuesta> ").strip())
     except (EOFError, KeyboardInterrupt):

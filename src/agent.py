@@ -242,8 +242,13 @@ async def _stream_and_yield(
             if node == SUMMARIZATION_NODE_NAME:
                 continue
 
-            # Text tokens (main agent or subagent)
-            if hasattr(token, "content") and isinstance(token.content, str) and token.content:
+            # Text tokens (main agent or subagent) — skip tool result messages
+            if (
+                hasattr(token, "content")
+                and isinstance(token.content, str)
+                and token.content
+                and getattr(token, "type", None) != "tool"
+            ):
                 event_kind = AgentEventKind.SUBAGENT_TOKEN if is_subagent else AgentEventKind.TOKEN
                 if not is_subagent:
                     response_text += token.content
